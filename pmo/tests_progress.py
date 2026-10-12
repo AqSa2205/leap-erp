@@ -16,7 +16,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
-from finance.models import PaymentMilestone, ProjectFinance
+from finance.models import CashOutflowRow, PaymentMilestone, ProjectFinance
 from pmo.models import MilestoneProgressEntry, ProjectMilestone
 from pmo.progress import (board_row, cash_in, cash_out, leaves,
                           project_completion, total_weightage,
@@ -243,8 +243,44 @@ class CashTests(MilestoneFixtureMixin, TestCase):
         other = self.build_project(reference='LNA-8888')
         self.assertEqual(cash_in(other), Decimal('0'))
 
-    def test_cash_out_is_zero_with_no_orders(self):
+    def test_cash_out_is_zero_with_no_outflow_rows(self):
         self.assertEqual(cash_out(self.project), Decimal('0'))
+
+    def test_cash_out_counts_only_stages_dated_on_or_before_today(self):
+        """Cash Out comes from finance's cash-outflow schedule, not from POs.
+        A vendor payment scheduled for next month has not left yet."""
+        CashOutflowRow.objects.create(
+            project=self.project, part='A1', amount=Decimal('100000'),
+            date_1=date(2026, 3, 1), pct_1=Decimal('30'),
+            date_2=date(2026, 6, 1), pct_2=Decimal('20'),    # due on as_of: counts
+            date_3=date(2026, 9, 1), pct_3=Decimal('50'))    # future: does not
+        self.assertEqual(cash_out(self.project, as_of=date(2026, 6, 1)),
+                         Decimal('50000.00'))
+
+    def test_cash_out_is_ex_vat(self):
+        """The approved budget carries no VAT, so Cash Out must not either,
+        or every project reads ~15% further through its budget than it is."""
+        CashOutflowRow.objects.create(
+            project=self.project, part='A2', amount=Decimal('100000'),
+            vat=Decimal('15000'), total_amount=Decimal('115000'),
+            date_1=date(2026, 1, 1), pct_1=Decimal('100'))
+        self.assertEqual(cash_out(self.project, as_of=date(2026, 6, 1)),
+                         Decimal('100000.00'))
+
+    def test_cash_out_sums_rows_and_ignores_undated_stages(self):
+        CashOutflowRow.objects.create(
+            project=self.project, part='A1', amount=Decimal('10000'),
+            date_1=date(2026, 1, 1), pct_1=Decimal('100'))
+        CashOutflowRow.objects.create(
+            project=self.project, part='A2', amount=Decimal('20000'),
+            date_1=date(2026, 1, 1), pct_1=Decimal('25'),
+            pct_2=Decimal('75'))                               # no date yet
+        other = self.build_project(reference='LNA-7777')
+        CashOutflowRow.objects.create(
+            project=other, part='A1', amount=Decimal('99999'),
+            date_1=date(2026, 1, 1), pct_1=Decimal('100'))     # other project
+        self.assertEqual(cash_out(self.project, as_of=date(2026, 6, 1)),
+                         Decimal('15000.00'))
 
 
 class BoardRowTests(MilestoneFixtureMixin, TestCase):

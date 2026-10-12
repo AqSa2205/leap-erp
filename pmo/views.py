@@ -42,6 +42,14 @@ from .workbook_import import (deserialise_activities, plan_workbook,
                               serialise_activities, write_activities)
 
 
+from django.contrib import messages
+from django.shortcuts import get_object_or_404, redirect
+from django.views.decorators.http import require_POST
+
+from .progress import financial_status_of
+from .models import DeliveryBoardComment
+
+
 def can_see_delivery(user):
     """Who gets the Project Management department.
 
@@ -134,7 +142,8 @@ def _visible_projects(user):
     """
     return (
         projects_visible_to(user)
-        .select_related('region', 'status', 'finance')
+        .select_related('region', 'status', 'finance',
+                        'delivery_comment', 'delivery_comment__updated_by')
         .prefetch_related(
             Prefetch('milestones',
                      queryset=ProjectMilestone.objects.prefetch_related('progress_entries')),
@@ -154,17 +163,26 @@ def board(request):
     if not can_see_delivery(request.user):
         raise PermissionDenied('The Project Management department is not open to your role.')
 
+    from finance.views import _can_finance  # local: avoids an app import cycle
     projects = list(_visible_projects(request.user))
     rows = board_rows(projects)
     total_in = sum((r['cash_in'] for r in rows), ZERO)
     total_out = sum((r['cash_out'] for r in rows), ZERO)
+    total_budget = sum((r['budget'] for r in rows if r['budget'] is not None), ZERO)
 
     return render(request, 'pmo/board.html', {
         'rows': rows,
         'total_cash_in': total_in,
         'total_cash_out': total_out,
+        # Cash Out links to Finance -> Cash Outflow, but only for users
+        # that page lets in; anyone else would just be bounced.
+        'can_open_finance': _can_finance(request.user),
         'total_net': total_in - total_out,
         'problem_count': sum(1 for r in rows if r['weightage_problems']),
+        'total_budget': total_budget,
+        'over_budget_count': sum(1 for r in rows if r['budget_status'] == 'over'),
+        'as_of': timezone.localdate(),
+        'can_comment': can_update_progress(request.user),
         'can_update': can_update_progress(request.user),
     })
 
@@ -2365,3 +2383,144 @@ def mpc_manpower_consolidated(request, pk):
                         'First Year Maintenance — coming in a later phase.',
         'icon': 'bi-diagram-3',
     })
+
+# -- Delivery Board financials: comment and Excel export ----------------------
+
+BOARD_COMMENT_MAX_LENGTH = 1000
+
+
+@login_required
+@delivery_required
+@require_POST
+def board_comment(request, pk):
+    """Save the PM's comment against one project on the Delivery Board.
+
+    Same people who may update progress (PM, admin, super admin); everyone
+    else on the board reads it. The project is looked up inside the user's
+    own visible projects, so another region's project is a 404.
+    """
+    if not can_update_progress(request.user):
+        raise PermissionDenied('You cannot edit Delivery Board comments.')
+    project = get_object_or_404(_visible_projects(request.user), pk=pk)
+    text = (request.POST.get('comment') or '').strip()
+    if len(text) > BOARD_COMMENT_MAX_LENGTH:
+        messages.error(request, f'Comment is too long ({len(text)} characters). '
+                                f'The limit is {BOARD_COMMENT_MAX_LENGTH}.')
+        return redirect('pmo:board')
+    DeliveryBoardComment.objects.update_or_create(
+        project=project, defaults={'comment': text, 'updated_by': request.user})
+    messages.success(request, f'Comment saved for {project.project_name}.')
+    return redirect('pmo:board')
+
+
+@login_required
+@delivery_required
+def board_export_excel(request):
+    """The Delivery Board's financials as an .xlsx, in the layout of the PM's
+    'Status of Projects Budget' sheet, with the same colours as the board."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    rows = board_rows(list(_visible_projects(request.user)))
+    as_of = timezone.localdate()
+
+    columns = [
+        'Sr. No', 'Project', 'Reference', 'Cash In (SAR)', 'Cash Out (SAR)',
+        'Budget (SAR)', 'Budget Status', 'Cash In \u2212 Cash Out (SAR)',
+        'Financial Status', 'Last Update', 'Comment', 'Status of Project',
+    ]
+    ncols = len(columns)
+    money = '#,##0.00;-#,##0.00;"-"'
+
+    pink, pink_font = PatternFill('solid', fgColor='FFC7CE'), Font(bold=True, color='9C0006')
+    green, green_font = PatternFill('solid', fgColor='C6EFCE'), Font(bold=True, color='006100')
+    grey_font = Font(color='808080')
+
+    def tone(cell, state):
+        if state in ('over', 'negative'):
+            cell.fill, cell.font = pink, pink_font
+        elif state in ('under', 'within', 'positive'):
+            cell.fill, cell.font = green, green_font
+        else:
+            cell.font = grey_font
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Budget'
+    ws.append(['Status of Projects Budget'])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    ws['A1'].font = Font(bold=True, size=14, color='404040')
+    ws.append([f'As of {as_of:%d %b %Y}. Cash In is payments received; Cash Out is '
+               f'vendor payments due to date on Finance\'s cash outflow schedule (ex-VAT); '
+               f'Budget is the finance-approved costing.'])
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    ws['A2'].font = Font(italic=True, size=9, color='666666')
+    ws.append([])
+    header_idx = ws.max_row + 1
+    ws.append(columns)
+
+    for i, row in enumerate(rows, start=1):
+        project = row['project']
+        last = row['last_update']
+        ws.append([
+            i,
+            project.project_name,
+            row['reference'] or '',
+            float(row['cash_in']),
+            float(row['cash_out']),
+            float(row['budget']) if row['budget'] is not None else 'No approved budget',
+            row['budget_status_label'],
+            float(row['net']),
+            row['financial_status_label'],
+            timezone.localtime(last).date() if last else None,
+            row['comment'],
+            project.status.name if project.status else '',
+        ])
+        r = ws.max_row
+        for c in (4, 5, 6, 8):
+            ws.cell(row=r, column=c).number_format = money
+        ws.cell(row=r, column=10).number_format = 'dd mmm yyyy'
+        ws.cell(row=r, column=11).alignment = Alignment(wrap_text=True, vertical='top')
+        if row['budget'] is None:
+            ws.cell(row=r, column=6).font = grey_font
+        tone(ws.cell(row=r, column=7), row['budget_status'])
+        tone(ws.cell(row=r, column=8), row['financial_status'])
+        tone(ws.cell(row=r, column=9), row['financial_status'])
+        if project.status and project.status.color:
+            hex_color = project.status.color.lstrip('#').upper()
+            if len(hex_color) == 6:
+                cell = ws.cell(row=r, column=12)
+                cell.fill = PatternFill('solid', fgColor=hex_color)
+                cell.font = Font(bold=True, color='FFFFFF')
+
+    _style_export_header_and_grid(ws, header_idx, ncols)
+
+    total_in = sum((r['cash_in'] for r in rows), ZERO)
+    total_out = sum((r['cash_out'] for r in rows), ZERO)
+    total_budget = sum((r['budget'] for r in rows if r['budget'] is not None), ZERO)
+    ws.append(['', 'Total', '', float(total_in), float(total_out), float(total_budget),
+               '', float(total_in - total_out), '', None, '', ''])
+    r = ws.max_row
+    top = Border(top=Side(style='medium', color='404040'))
+    for c in range(1, ncols + 1):
+        cell = ws.cell(row=r, column=c)
+        cell.font = Font(bold=True)
+        cell.border = top
+    for c in (4, 5, 6, 8):
+        ws.cell(row=r, column=c).number_format = money
+    tone(ws.cell(row=r, column=8), financial_status_of(total_in - total_out))
+
+    widths = [7, 42, 18, 16, 16, 18, 15, 20, 15, 13, 40, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = ws.cell(row=header_idx + 1, column=3)
+
+    buf = BytesIO()
+    wb.save(buf)
+    response = HttpResponse(
+        buf.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = (
+        f'attachment; filename="Delivery_Board_Financials_{as_of:%Y-%m-%d}.xlsx"')
+    return response

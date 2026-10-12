@@ -10,8 +10,10 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.utils import timezone
+from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import prefetch_related_objects
 
-from procurement.budget_status import commitment, exchange_rates
+from procurement.budget_status import approved_budgets_for, exchange_rates
 
 from .models import ONE, WEIGHTAGE_TOLERANCE, ZERO
 
@@ -279,18 +281,74 @@ def cash_in(project):
     )
 
 
-def cash_out(project, rates=None):
-    """Committed spend, from the purchase orders.
+def cash_out(project, rates=None, as_of=None):
+    """Money paid out to vendors, from finance's own cash-outflow schedule.
 
-    Uses procurement's own definition of committed (issued, acknowledged,
-    completed) so this figure and the procurement budget screens cannot
-    disagree.
+    Read from finance's CashOutflowRow schedule (Finance -> Cash Outflow), not
+    from purchase orders, so the board and the finance page cannot disagree.
+    Only staged payments dated on or before `as_of` (today) count - a payment
+    scheduled for next month has not left yet - mirroring cash_in, which only
+    counts milestones actually received.
+
+    Ex-VAT (`amount`, not `total_amount`): the approved budget carries no VAT,
+    and Over/Under Budget compares the two directly.
+
+    `rates` is unused (finance records rows in SAR); kept so existing callers
+    that pass it still work.
     """
-    rates = exchange_rates() if rates is None else rates
-    return commitment(list(project.purchase_orders.all()), rates)['committed']
+    as_of = as_of or timezone.localdate()
+    total = ZERO
+    for row in project.cash_outflow_rows.all():
+        paid_pct = sum(
+            (getattr(row, f'pct_{i}') or ZERO
+             for i in range(1, 7)
+             if getattr(row, f'date_{i}') is not None
+             and getattr(row, f'date_{i}') <= as_of),
+            ZERO,
+        )
+        total += row.amount * paid_pct / Decimal('100')
+    return total.quantize(Decimal('0.01'))
 
 
-def board_row(project, rates=None):
+BUDGET_STATUS_LABELS = {
+    'over': 'Over Budget',
+    'under': 'Under Budget',
+    'within': 'Within Budget',
+    'none': 'No budget',
+}
+FINANCIAL_STATUS_LABELS = {
+    'positive': '+ Positive',
+    'negative': '\u2212 Negative',
+    'balanced': '= Balanced',
+}
+
+
+def budget_status_of(budget, spent):
+    """Cash Out against the approved budget, the way the PM's Excel worked
+    it out (Over / Under / Within Budget).
+
+    No approved budget is 'none', never 'under': a project with nothing to
+    compare against has not come in under anything.
+    """
+    if budget is None or budget <= ZERO:
+        return 'none'
+    if spent > budget:
+        return 'over'
+    if spent < budget:
+        return 'under'
+    return 'within'
+
+
+def financial_status_of(net):
+    """Cash In minus Cash Out as a word: positive, negative or balanced."""
+    if net < ZERO:
+        return 'negative'
+    if net > ZERO:
+        return 'positive'
+    return 'balanced'
+
+
+def board_row(project, rates=None, budgets=None):
     """One project's line on the overview board.
 
     Every column is derived. There is no manual total to fall out of step and
@@ -310,6 +368,22 @@ def board_row(project, rates=None):
         for entry in row.progress_entries.all()
     ]
     last_update = max((e.recorded_at for e in entries), default=None)
+
+    # Procurement's own approved-budget figure (finance-approved sheets,
+    # optional sections excluded, SAR, ex-VAT) so the board and the
+    # procurement budget screens cannot disagree. board_rows passes it in
+    # for the whole board at once.
+    if budgets is None:
+        budgets = approved_budgets_for([project])
+    budget = budgets.get(project.pk)
+    if budget is not None and budget <= ZERO:
+        budget = None
+    budget_state = budget_status_of(budget, spent)
+    money_state = financial_status_of(received - spent)
+    try:
+        note = project.delivery_comment
+    except ObjectDoesNotExist:
+        note = None
 
     return {
         'project': project,
@@ -331,6 +405,14 @@ def board_row(project, rates=None):
         # Answerable because each update is its own row. The workbook's
         # equivalent column was TODAY(), which always read as today.
         'last_update': last_update,
+        'budget': budget,
+        'budget_status': budget_state,
+        'budget_status_label': BUDGET_STATUS_LABELS[budget_state],
+        'financial_status': money_state,
+        'financial_status_label': FINANCIAL_STATUS_LABELS[money_state],
+        'comment': note.comment if note else '',
+        'comment_updated_by': note.updated_by if note else None,
+        'comment_updated_at': note.updated_at if note else None,
     }
 
 
@@ -340,5 +422,8 @@ def board_rows(projects):
     Exchange rates are fetched once and passed down: doing it per project is
     how a board that is fine with ten projects becomes slow with a hundred.
     """
+    # One query for every project's finance outflow rows, not one per row.
+    prefetch_related_objects(projects, 'cash_outflow_rows')
     rates = exchange_rates()
-    return [board_row(p, rates) for p in projects]
+    budgets = approved_budgets_for(projects)
+    return [board_row(p, rates, budgets) for p in projects]

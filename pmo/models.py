@@ -996,3 +996,21 @@ class ManpowerCostingHeader(models.Model):
     def proposed_contract_value_incl_vat(self):
         return (self.proposed_contract_value
                 * (1 + self.vat_rate / Decimal('100'))).quantize(Decimal('0.01'))
+
+class DeliveryBoardComment(models.Model):
+    """The PM's note against a project on the Delivery Board's financials.
+
+    Everything else on the board is derived; this is the one thing a person
+    types, so it records who typed it and when. One per project: it is a
+    standing remark, not a log.
+    """
+    project = models.OneToOneField(
+        'projects.Project', on_delete=models.CASCADE, related_name='delivery_comment')
+    comment = models.TextField(blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Comment on {self.project}'
