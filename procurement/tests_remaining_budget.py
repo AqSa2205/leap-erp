@@ -174,6 +174,32 @@ class RemainingBudgetTileTests(TestCase):
         self.assertEqual(r.context['budget_total'], before)
         self.assertEqual(r.context['remaining_budget'], before - Decimal('75'))
 
+    def test_a_line_on_the_po_that_is_not_on_this_budget_is_not_deducted(self):
+        """A PO is not all budget. Procurement can add a line the budget never
+        had - freight, an extra material - and the PO detail page's Budget vs
+        Actual counts only the budgeted ones, so this must too or the two
+        screens report different figures for the same order."""
+        po = self.po('issued', '100')
+        PurchaseOrderItem.objects.create(
+            purchase_order=po, serial_number=2, description='freight',
+            quantity=Decimal('1'), rate_per_unit=Decimal('500'), source_bom_item=None)
+        r = self.page()
+        self.assertEqual(r.context['remaining_budget'],
+                         r.context['budget_total'] - Decimal('100'))
+        self.assertEqual(po.budget_breakdown()['deducted'], Decimal('100'))
+
+    def test_a_discounted_po_is_deducted_net_of_its_discount(self):
+        """The discount is a percentage of the whole order, so the budgeted
+        lines carry their share of it. With every line budgeted that is the
+        order's gross_value, unchanged from measuring the order as a whole."""
+        po = self.po('issued', '1000')
+        po.discount_rate = Decimal('10')
+        po.save(update_fields=['discount_rate'])
+        r = self.page()
+        self.assertEqual(r.context['remaining_budget'],
+                         r.context['budget_total'] - Decimal('900'))
+        self.assertEqual(po.gross_value, Decimal('900'))
+
     # --- who sees it ---------------------------------------------------------
 
     def test_non_procurement_user_does_not_get_the_tile(self):
