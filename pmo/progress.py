@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import prefetch_related_objects
 
-from procurement.budget_status import approved_budgets_for, exchange_rates
+from procurement.budget_status import approved_budgets_for, commitment, exchange_rates
 
 from .models import ONE, WEIGHTAGE_TOLERANCE, ZERO
 
@@ -378,7 +378,12 @@ def board_row(project, rates=None, budgets=None):
     budget = budgets.get(project.pk)
     if budget is not None and budget <= ZERO:
         budget = None
-    budget_state = budget_status_of(budget, spent)
+    # Budget Status compares the budget with what procurement has COMMITTED
+    # (issued POs and later, ex-VAT), the same rule as procurement's own budget
+    # screens. Not with cash paid: finance stages payments late, so paid-to-date
+    # would call an over-committed project "Under Budget".
+    committed = commitment(list(project.purchase_orders.all()), rates)['committed']
+    budget_state = budget_status_of(budget, committed)
     money_state = financial_status_of(received - spent)
     try:
         note = project.delivery_comment
@@ -423,7 +428,7 @@ def board_rows(projects):
     how a board that is fine with ten projects becomes slow with a hundred.
     """
     # One query for every project's finance outflow rows, not one per row.
-    prefetch_related_objects(projects, 'cash_outflow_rows')
+    prefetch_related_objects(projects, 'cash_outflow_rows', 'purchase_orders')
     rates = exchange_rates()
     budgets = approved_budgets_for(projects)
     return [board_row(p, rates, budgets) for p in projects]

@@ -220,3 +220,55 @@ class BoardExportCashOutTests(TestCase):
     def test_role_without_delivery_access_cannot_export(self):
         self.client.force_login(self.dev)
         self.assertEqual(self.client.get(self.url).status_code, 403)
+
+
+class BudgetStatusUsesCommittedSpendTests(TestCase):
+    """Budget Status = approved budget vs committed POs, not cash paid."""
+
+    def setUp(self):
+        from costing.models import CostingLineItem, CostingSection, CostingSheet
+        region = Region.objects.create(name='BS Arabia', code='BSLNA', currency='SAR')
+        status = ProjectStatus.objects.create(name='BS Ongoing', category='ongoing')
+        self.project = Project.objects.create(
+            project_name='BS Project', status=status, region=region)
+        sheet = CostingSheet.objects.create(
+            title='BS Budget', project=self.project, margin=Decimal('0'),
+            discount_rate=Decimal('0'), workflow_stage='finance_approved')
+        section = CostingSection.objects.create(
+            costing_sheet=sheet, section_number='A.1', title='Supply', order=0)
+        CostingLineItem.objects.create(
+            section=section, item_number='1', description='Cam', quantity=Decimal('1'),
+            unit='EA', base_unit_cost=Decimal('100'), supplier_currency='SAR')
+        self.counter = 0
+
+    def po(self, status, rate):
+        from procurement.models import PurchaseOrder, PurchaseOrderItem
+        self.counter += 1
+        po = PurchaseOrder.objects.create(
+            po_number=f'BS-{self.counter}', po_date=date(2026, 1, 1), status=status,
+            vendor_name='V', po_issued_by='T', currency='SAR',
+            discount_rate=Decimal('0'), project=self.project)
+        PurchaseOrderItem.objects.create(
+            purchase_order=po, serial_number=1, description='x',
+            quantity=Decimal('1'), rate_per_unit=Decimal(rate))
+        return po
+
+    def test_over_committed_project_is_over_budget_even_with_nothing_paid(self):
+        budget = board_row(self.project)['budget']
+        self.assertIsNotNone(budget)
+        self.po('issued', str(budget * 5))
+        row = board_row(self.project)
+        self.assertEqual(row['cash_out'], Decimal('0.00'))
+        self.assertEqual(row['budget_status'], 'over')
+        self.assertEqual(row['budget_status_label'], 'Over Budget')
+
+    def test_committed_within_budget_is_not_over(self):
+        budget = board_row(self.project)['budget']
+        self.po('issued', str(budget / 2))
+        self.assertEqual(board_row(self.project)['budget_status'], 'under')
+
+    def test_draft_and_cancelled_pos_do_not_count_as_committed(self):
+        budget = board_row(self.project)['budget']
+        self.po('draft', str(budget * 5))
+        self.po('cancelled', str(budget * 5))
+        self.assertNotEqual(board_row(self.project)['budget_status'], 'over')

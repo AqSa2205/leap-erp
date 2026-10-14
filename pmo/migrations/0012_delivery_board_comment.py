@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('pmo', '0010_engineer_rate_table'),
+        ('pmo', '0011_project_costing_integrated'),
         ('projects', '0022_merge_20260914_1208'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
