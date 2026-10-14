@@ -1,0 +1,211 @@
+{% extends 'base.html' %}
+{% load humanize %}
+
+{% block title %}Project Costing (Integrated) - {{ project.project_name }}{% endblock %}
+{% block page_title %}Project Costing (Integrated){% endblock %}
+
+{% block extra_css %}
+<style>
+    .gs-shell { background: #fff; border: 1px solid #e9ecef; border-radius: 10px; overflow: hidden; margin-bottom: 1.25rem; }
+    .gs-shell .gs-title { padding: 10px 14px; font-weight: 700; font-size: 0.95rem; color: #1a1a1a; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .gs-shell .gs-title a { font-weight: 400; font-size: 0.8rem; }
+    table.gs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.85rem; margin-bottom: 0; }
+    table.gs-table th, table.gs-table td { padding: 6px 8px; border: 1px solid #dee2e6; vertical-align: middle; background: #fff; }
+    table.gs-table thead th { background: #343a40; color: #fff; font-weight: 700; text-align: center; }
+    table.gs-table tfoot td, table.gs-table tr.pc-sub td { background: #f1f1f1; font-weight: 700; }
+    .pc-num { text-align: right; white-space: nowrap; }
+    .pc-linked { color: #198754; }
+    .pc-input input { color: #0000FF; width: 130px; margin-left: auto; }
+    .pc-grand td { background: #fff3cd !important; font-weight: 700; }
+    .pc-head td:first-child { width: 260px; font-weight: 600; background: #f8f9fa; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <a href="{% url 'pmo:mpc_project_overview' project.pk %}" class="text-muted small"><i class="bi bi-arrow-left"></i> {{ project.project_name }}</a>
+    <div class="d-flex gap-2">
+        <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-diagram-3 me-1"></i> Grade Structure</a>
+        <a href="{% url 'pmo:mpc_first_year_detail' project.pk %}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-journal-text me-1"></i> First Year Maintenance</a>
+        <a href="{% url 'pmo:mpc_project_costing_export_excel' project.pk %}" class="btn btn-outline-success btn-sm"><i class="bi bi-file-earmark-excel me-1"></i> Export to Excel</a>
+    </div>
+</div>
+
+<p class="text-muted small">
+    Read-only: <span class="pc-linked fw-semibold">green</span> figures come from the <strong>Grade Structure</strong> (Designation-wise Manpower)
+    and sections B&ndash;D from <strong>First Year Maintenance</strong>; edit them there. Statutory rates come from the Employment Cost
+    Assumptions. Only the <span style="color:#0000FF;" class="fw-semibold">blue</span> values below belong to this sheet.
+    Accommodation is charged to expats only: <strong>Staff</strong> = grade categories EX, A, E; <strong>Technician</strong> = T, O.
+</p>
+
+<form method="post" novalidate>
+    {% csrf_token %}
+    {% if form.errors %}<div class="alert alert-danger"><strong>Please fix:</strong> {{ form.errors }}</div>{% endif %}
+
+    <!-- HEADER -->
+    <div class="gs-shell">
+        <table class="gs-table pc-head">
+            <tbody>
+                <tr><td>Client</td><td>{{ project.customer|default:"&mdash;" }}</td></tr>
+                <tr><td>Project Name</td><td>{{ project.project_name }}</td></tr>
+                <tr><td>Document Name</td><td>Integrated Manpower &amp; Project Costing</td></tr>
+                <tr>
+                    <td>Contract Duration (Months)</td>
+                    <td class="pc-input">{% if can_edit %}<div style="max-width:130px;">{{ form.contract_duration_months }}</div>{% else %}<span style="color:#0000FF;">{{ months|floatformat:"0" }}</span>{% endif %}</td>
+                </tr>
+                <tr><td>Currency</td><td>{{ currency }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- A: MANPOWER -->
+    <div class="gs-shell">
+        <div class="gs-title">A: MANPOWER COST (MONTHLY / RECURRING EXPENSES)
+            <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}">Edit manpower in Grade Structure &rarr;</a></div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead><tr>
+                    <th style="width:45px;">No.</th><th>Description</th><th>Grade</th><th>Discipline</th><th>Nationality</th>
+                    <th>Nature of Expense</th><th>Rate / Amount ({{ currency }})</th><th>Qty / Heads</th>
+                    <th>Monthly Exp. ({{ currency }})</th><th>Accom. Group</th>
+                </tr></thead>
+                <tbody>
+                    {% for r in manpower_rows %}
+                    <tr>
+                        <td class="text-center">{{ r.no }}</td>
+                        <td class="pc-linked">{{ r.line.designation }}</td>
+                        <td class="text-center pc-linked">{{ r.line.grade_code }}</td>
+                        <td class="pc-linked">{{ r.line.discipline|default:"&mdash;" }}</td>
+                        <td class="text-center pc-linked">{{ r.line.get_nationality_display }}</td>
+                        <td class="text-center">Monthly</td>
+                        <td class="pc-num pc-linked">{{ r.rate|floatformat:2|intcomma }}</td>
+                        <td class="pc-num pc-linked">{{ r.heads|floatformat:"0" }}</td>
+                        <td class="pc-num">{{ r.monthly|floatformat:2|intcomma }}</td>
+                        <td class="text-center">{{ r.group }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="10" class="text-center text-muted py-3">No designations yet. Add them under Designation-wise Manpower on the
+                        <a href="{% url 'pmo:mpc_grade_structure_detail' project.pk %}">Grade Structure</a> page.</td></tr>
+                    {% endfor %}
+                    <tr class="pc-sub">
+                        <td></td><td colspan="6">Sub-total &mdash; Monthly Salaries</td>
+                        <td class="pc-num">{{ heads_total|floatformat:"0" }}</td>
+                        <td class="pc-num">{{ salaries_total|floatformat:2|intcomma }}</td><td></td>
+                    </tr>
+                    {% for s in statutory %}
+                    <tr>
+                        <td class="text-center">{{ s.no }}</td>
+                        <td colspan="4">{{ s.label }}</td>
+                        <td class="text-center">{{ s.nature }}</td>
+                        <td class="pc-num{% if s.field %} pc-input{% endif %}">
+                            {% if s.field and can_edit %}
+                                {% if s.field == 'accommodation_staff_annual' %}{{ form.accommodation_staff_annual }}{% else %}{{ form.accommodation_technician_annual }}{% endif %}
+                            {% elif s.is_pct %}{{ s.rate|floatformat:2 }}%
+                            {% else %}<span {% if s.field %}style="color:#0000FF;"{% endif %}>{{ s.rate|floatformat:2|intcomma }}</span>{% endif %}
+                        </td>
+                        <td class="pc-num">{% if s.heads is not None %}{{ s.heads|floatformat:"0" }}{% endif %}</td>
+                        <td class="pc-num">{{ s.monthly|floatformat:2|intcomma }}</td>
+                        <td></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot><tr>
+                    <td></td><td colspan="7">TOTAL A &mdash; Monthly Manpower Cost</td>
+                    <td class="pc-num">{{ total_a|floatformat:2|intcomma }}</td><td></td>
+                </tr></tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- B, C, D: FROM FIRST YEAR MAINTENANCE -->
+    {% for sec in sections %}
+    <div class="gs-shell">
+        <div class="gs-title">{{ sec.label|upper }}
+            <a href="{% url 'pmo:mpc_first_year_detail' project.pk %}">Edit in First Year Maintenance &rarr;</a></div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead><tr>
+                    <th style="width:45px;">No.</th><th>Description</th><th>Nature of Expense</th>
+                    <th>Rate / Amount ({{ currency }})</th><th>Qty / Heads</th><th>Monthly / Total Exp. ({{ currency }})</th><th>Remarks</th>
+                </tr></thead>
+                <tbody>
+                    {% for l in sec.lines %}
+                    <tr>
+                        <td class="text-center">{{ l.no }}</td>
+                        <td class="pc-linked">{{ l.line.description }}</td>
+                        <td class="text-center pc-linked">{{ l.line.get_nature_of_expense_display }}</td>
+                        <td class="pc-num pc-linked">{{ l.line.amount|floatformat:2|intcomma }}</td>
+                        <td class="pc-num pc-linked">{{ l.line.qty|floatformat:"-2" }}</td>
+                        <td class="pc-num">{{ l.amount|floatformat:2|intcomma }}</td>
+                        <td class="small text-muted">{{ l.line.remarks }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="7" class="text-center text-muted py-3">No lines in this section of First Year Maintenance.</td></tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot><tr>
+                    <td></td><td colspan="4">TOTAL {{ sec.code }}</td>
+                    <td class="pc-num">{{ sec.total|floatformat:2|intcomma }}</td><td></td>
+                </tr></tfoot>
+            </table>
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- TOTAL COSTS -->
+    <div class="gs-shell">
+        <div class="gs-title">TOTAL COSTS (CONTRACT PERIOD: {{ months|floatformat:"0" }} MONTHS)</div>
+        <div class="table-responsive">
+            <table class="gs-table">
+                <thead><tr>
+                    <th style="width:70px;">Section</th><th>Description</th><th>Monthly / Recurring ({{ currency }})</th>
+                    <th>Months</th><th>One Time ({{ currency }})</th><th>Total ({{ currency }})</th>
+                </tr></thead>
+                <tbody>
+                    {% for row in totals %}
+                    <tr>
+                        <td class="text-center fw-semibold">{{ row.code }}</td>
+                        <td>{{ row.label }}</td>
+                        <td class="pc-num">{{ row.monthly|floatformat:2|intcomma }}</td>
+                        <td class="pc-num">{{ months|floatformat:"0" }}</td>
+                        <td class="pc-num">{{ row.one_time|floatformat:2|intcomma }}</td>
+                        <td class="pc-num">{{ row.contract_total|floatformat:2|intcomma }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot><tr class="pc-grand">
+                    <td></td><td colspan="4">GRAND TOTAL COST</td>
+                    <td class="pc-num">{{ grand_total|floatformat:2|intcomma }}</td>
+                </tr></tfoot>
+            </table>
+        </div>
+    </div>
+
+    <!-- COST SUMMARY & PRICING -->
+    <div class="gs-shell">
+        <div class="gs-title">COST SUMMARY &amp; PRICING</div>
+        <table class="gs-table pc-head">
+            <tbody>
+                <tr><td>Total Cost ({{ months|floatformat:"0" }} months)</td><td class="pc-num">{{ grand_total|floatformat:2|intcomma }}</td></tr>
+                <tr><td>Monthly Cost</td><td class="pc-num">{{ monthly_cost|floatformat:2|intcomma }}</td></tr>
+                <tr><td>Daily Cost (per calendar day)</td><td class="pc-num">{{ daily_cost|floatformat:2|intcomma }}</td></tr>
+                {% if can_see_bid_value %}
+                <tr><td>Target Profit Margin %</td><td class="pc-num">{% if margin_set %}{{ margin_pct|floatformat:2 }}%{% else %}<span class="text-muted">Not set (First Year Maintenance)</span>{% endif %}</td></tr>
+                <tr><td>Proposed Contract Value (excl. VAT)</td><td class="pc-num fw-bold">{{ contract_value|floatformat:2|intcomma }}</td></tr>
+                <tr><td>Profit</td><td class="pc-num">{{ profit|floatformat:2|intcomma }}</td></tr>
+                <tr><td>VAT %</td><td class="pc-num">{{ vat_pct|floatformat:2 }}%</td></tr>
+                <tr class="pc-grand"><td>Proposed Contract Value (incl. VAT)</td><td class="pc-num">{{ contract_value_incl_vat|floatformat:2|intcomma }}</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+        {% if can_see_bid_value %}<div class="px-3 py-2 small text-muted">Margin and VAT are set on First Year Maintenance.</div>{% endif %}
+    </div>
+
+    {% if can_edit %}
+    <div class="d-flex gap-2 mb-4 align-items-center">
+        <button type="submit" class="btn btn-danger"><i class="bi bi-check-lg"></i> Save Changes</button>
+        <span class="text-muted small">Saves the contract duration and accommodation rates; everything else is edited on its own page.</span>
+    </div>
+    {% endif %}
+</form>
+{% endblock %}
