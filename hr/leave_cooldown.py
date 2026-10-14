@@ -48,9 +48,12 @@ def annual_leave_cooldown(employee, leave_type, *, today=None):
     # applications out. Taking the record with the latest end_date (past,
     # ongoing, or future) means an upcoming booking is what the cooldown is
     # computed from until it's actually the most recent thing on record.
+    # Extra sick days charged to Annual (overflow_for set) were sick days,
+    # not a holiday, so they never start a cooldown. They still count
+    # toward "full entitlement used" below, because they did use the days.
     last_record = (
         LeaveRecord.objects
-        .filter(employee=employee, leave_type=leave_type)
+        .filter(employee=employee, leave_type=leave_type, overflow_for__isnull=True)
         .order_by('-end_date')
         .first())
     if last_record is None:

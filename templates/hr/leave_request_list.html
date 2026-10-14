@@ -197,6 +197,7 @@
             <tr>
               <td><a href="{{ detail_url }}">{{ r.employee.full_name }}</a>
                 {% if r.exceeds_balance %}<span class="badge" style="background: var(--leap-red); color:#fff;">Exceeds balance</span>{% endif %}
+                {% if r.sick_overflow_days %}<span class="badge badge-sick" title="Sick allowance used up: these extra days must be taken from Annual or Unpaid">Sick allowance used (+{{ r.sick_overflow_days|floatformat }})</span>{% endif %}
                 {% if r.logged_by_manager %}
                 <span class="badge bg-light text-dark border" title="This employee's manager logged this request on their behalf">
                   <i class="bi bi-person-badge"></i> By {{ r.created_by.get_full_name|default:r.created_by.username }} (manager)
@@ -307,7 +308,7 @@
                     {% if r.replacement_options %}
                     <div class="col-md-6">
                       <label class="form-label small">Replacement</label>
-                      <select name="replacement" class="form-select form-select-sm" required>
+                      <select name="replacement" class="form-select form-select-sm">
                         <option value="">— Select replacement —</option>
                         {% for p in r.replacement_options %}
                         <option value="{{ p.pk }}" {% if p.pk == r.retry_replacement_id %}selected{% endif %}>{{ p.full_name }}</option>

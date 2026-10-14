@@ -628,9 +628,9 @@ class LeaveRequestForm(forms.Form):
         behalf"), where the page reloads the options via AJAX as the employee
         changes and this re-derives them from the submitted pick. Limiting
         the queryset is also the validation - anyone outside that team is
-        rejected as an invalid choice. Required only when there's someone to
-        pick: an employee with no main manager has an empty list and must
-        still be able to apply.
+        rejected as an invalid choice. Whether a pick is *required* depends
+        on the dates too, so clean() decides that (see _needs_replacement);
+        the field itself never enforces it.
 
         A view that narrows the employee dropdown afterwards (log on behalf
         is scoped to the user's team) must call this again, so the choices
@@ -638,7 +638,18 @@ class LeaveRequestForm(forms.Form):
         leave_for = self.fixed_employee or self._picked_employee()
         candidates = leave_for.replacement_candidates() if leave_for else Employee.objects.none()
         self.fields['replacement'].queryset = candidates
-        self.fields['replacement'].required = candidates.exists()
+        self.fields['replacement'].required = False
+        self._has_replacement_candidates = candidates.exists()
+
+    def _needs_replacement(self, start_date):
+        """A replacement is required for new leave only - leave starting
+        today or later - and only when the employee has a team to pick from
+        (no main manager means an empty list). Leave that has already
+        happened, logged after the fact (often data entry from records),
+        doesn't need one: who covered then may not even be on the team."""
+        from django.utils import timezone
+        return bool(self._has_replacement_candidates and start_date
+                    and start_date >= timezone.localdate())
 
     def _picked_employee(self):
         """The employee chosen in this form's Employee dropdown - from the
@@ -673,6 +684,9 @@ class LeaveRequestForm(forms.Form):
                 'A single leave request cannot span two different years. '
                 'Please submit this as two separate requests split at the year boundary.')
         elif employee and leave_type and start_date and end_date:
+            if ('replacement' in self.fields and not cleaned.get('replacement')
+                    and 'replacement' not in self.errors and self._needs_replacement(start_date)):
+                self.add_error('replacement', self.fields['replacement'].error_messages['required'])
             if leave_type.requires_medical_certificate and not document:
                 self.add_error('document',
                     f'A medical certificate/document is required for {leave_type.name} leave.')

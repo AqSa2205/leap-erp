@@ -39,6 +39,16 @@ def display_status_no_record(d, employee=None):
     return ''
 
 
+def leave_cell_code(leave_record):
+    """The leave code a register cell shows for this record. Extra days of a
+    sick leave past the allowance (overflow_for set) are still sick days:
+    'sick' when charged to Annual, 'sick_unpaid' when charged to Unpaid -
+    payroll needs to see that salary deduction at a glance."""
+    if leave_record.overflow_for_id:
+        return 'sick' if leave_record.leave_type.is_paid else 'sick_unpaid'
+    return leave_record.leave_type.code
+
+
 def cell_time_lines(cell):
     """The check-in/out times of a matrix cell as short 'HH:MM' strings, in order,
     for display beneath the status letter. Empty list when the cell has no
@@ -84,7 +94,7 @@ def build_matrix(employees, start, end, with_weekend_dates=False):
         last = min(lr.end_date, end)
         while dd <= last:
             leave_cell[(lr.employee_id, dd)] = removable_pk
-            leave_code_cell[(lr.employee_id, dd)] = lr.leave_type.code
+            leave_code_cell[(lr.employee_id, dd)] = leave_cell_code(lr)
             dd += timedelta(days=1)
 
     wfh_cells = set()

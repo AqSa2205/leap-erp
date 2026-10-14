@@ -368,13 +368,22 @@
                     {% if leave_request_form.end_date.errors %}<div class="small text-danger">{{ leave_request_form.end_date.errors|join:", " }}</div>{% endif %}
                   </div>
                 </div>
+                {% if sick_allowance_used %}
+                {# Shown only while Sick is the selected leave type - see the script below the form. #}
+                <div class="alert alert-warning py-2 small mb-2 d-none" id="sickAllowanceUsed"
+                     data-sick-leave-type="{{ sick_allowance_used.leave_type_id }}">
+                  <i class="bi bi-exclamation-triangle me-1"></i>
+                  You have used all {{ sick_allowance_used.effective_entitled_days|floatformat }} days of your sick leave for {{ sick_allowance_used.year }}.
+                  You can still apply for sick leave, but any further sick days will be adjusted from your other leave, such as your annual leave.
+                </div>
+                {% endif %}
                 <div class="mb-2">
                   <label class="form-label small">Reason</label>{{ leave_request_form.employee_reason }}
                   {% if leave_request_form.employee_reason.errors %}<div class="small text-danger">{{ leave_request_form.employee_reason.errors|join:", " }}</div>{% endif %}
                 </div>
                 {% if leave_request_form.replacement and leave_request_form.fields.replacement.queryset %}
                 <div class="mb-2">
-                  <label class="form-label small">Replacement <span class="text-muted">(who covers for you while you're away)</span></label>{{ leave_request_form.replacement }}
+                  <label class="form-label small">Replacement <span class="text-muted">(who covers for you while you're away; not needed for leave that has already started)</span></label>{{ leave_request_form.replacement }}
                   {% if leave_request_form.replacement.errors %}<div class="small text-danger">{{ leave_request_form.replacement.errors|join:", " }}</div>{% endif %}
                 </div>
                 {% endif %}
@@ -408,6 +417,18 @@
                   if (!select.options[i].disabled) { select.selectedIndex = i; break; }
                 }
               }
+            })();
+            </script>
+            <script>
+            (function () {
+              // The "sick leave used up" notice only matters while Sick is
+              // the chosen type, so it follows the Leave Type dropdown.
+              var notice = document.getElementById('sickAllowanceUsed');
+              var select = document.querySelector('#requestLeaveForm select[name="leave_type"]');
+              if (!notice || !select) return;
+              function sync() { notice.classList.toggle('d-none', select.value !== notice.dataset.sickLeaveType); }
+              select.addEventListener('change', sync);
+              sync();  // a form re-shown after an error may already have Sick selected
             })();
             </script>
 
@@ -476,6 +497,12 @@
                             {% else %}Waiting on a Super Admin to review (no other eligible approver is assigned){% endif %}
                           {% endwith %}
                         </div>
+                        {% if r.sick_overflow_days %}
+                        <div class="small text-warning d-flex align-items-center gap-1">
+                          <i class="bi bi-exclamation-triangle"></i>
+                          {{ r.sick_overflow_days|floatformat }} day(s) are beyond your sick leave and will be adjusted from your other leave.
+                        </div>
+                        {% endif %}
                         {% if r.can_cancel %}
                         {% if not r.can_edit %}
                         <div class="small text-muted d-flex align-items-center gap-1">
@@ -605,7 +632,7 @@
                         {% if r.replacement_options %}
                         <div class="col-md-6">
                           <label class="form-label small">Replacement</label>
-                          <select name="replacement" class="form-select form-select-sm" required>
+                          <select name="replacement" class="form-select form-select-sm">
                             <option value="">— Select replacement —</option>
                             {% for p in r.replacement_options %}
                             <option value="{{ p.pk }}" {% if p.pk == r.retry_replacement_id %}selected{% endif %}>{{ p.full_name }}</option>

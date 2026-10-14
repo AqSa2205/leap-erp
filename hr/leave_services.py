@@ -1,5 +1,106 @@
 """Leave entitlement generation and submission validation."""
 
+# Sick leave that runs past the employee's allowance is not refused: the
+# extra days are charged to Annual or Unpaid, whichever the approver picks.
+# HR's rule (Oct 2026) - no other leave type may absorb them, since only
+# Annual is an entitlement and the rest are goodwill.
+OVERFLOW_LEAVE_CODE = 'sick'
+OVERFLOW_TARGET_CODES = ('annual', 'unpaid')
+# Unpaid carries no balance, so it can always absorb the extra days.
+UNLIMITED_TARGET_CODES = ('unpaid',)
+# Phrase in the internal note left when an approver changes another's pick;
+# the request page finds those notes by it.
+OVERFLOW_CHANGE_NOTE = 'changed the extra sick days from'
+
+
+def format_days(days):
+    """'2' rather than '2.0' for a whole number of days, '1.5' otherwise."""
+    from decimal import Decimal
+    return f'{Decimal(days).normalize():f}'
+
+
+def allows_overflow(leave_type):
+    return leave_type.code == OVERFLOW_LEAVE_CODE
+
+
+def sick_allowance_used_up(employee, year):
+    """The employee's sick entitlement for `year` if it's fully used
+    (base + any HR exception days, read live), else None. Drives the
+    "your sick leave is used up" notice on My Profile and Log Leave Request."""
+    from .models import LeaveEntitlement
+    entitlement = (LeaveEntitlement.objects.filter(
+        employee=employee, leave_type__code=OVERFLOW_LEAVE_CODE, year=year)
+        .select_related('leave_type').first())
+    if entitlement is not None and entitlement.effective_remaining_days <= 0:
+        return entitlement
+    return None
+
+
+def overflow_target_choices():
+    """The leave types an approver may charge extra sick days to. Unpaid is
+    offered even while switched off as a requestable type - it's HR's chosen
+    fallback, not something employees apply for."""
+    from .models import LeaveType
+    return LeaveType.objects.filter(code__in=OVERFLOW_TARGET_CODES).order_by('name')
+
+
+def overflow_days(employee, leave_type, start_date, end_date, days=None,
+                  exclude_request_id=None, count_pending=True):
+    """How many days of this leave go past the employee's sick allowance.
+
+    Read live from the current entitlement (base + any HR exception days)
+    every time, never stored, so when HR raises or lowers someone's
+    allowance the answer follows. `count_pending` treats the employee's
+    other pending sick requests as already spoken for - right for the
+    employee's notice at submission; finalization passes False so only
+    leave actually approved counts. Zero for any other leave type, or when
+    no entitlement exists (validate_leave_submission reports that)."""
+    from decimal import Decimal
+    from .models import LeaveEntitlement, LeaveRequest
+
+    if not allows_overflow(leave_type):
+        return Decimal('0')
+    entitlement = LeaveEntitlement.objects.filter(
+        employee=employee, leave_type=leave_type, year=start_date.year).first()
+    if entitlement is None:
+        return Decimal('0')
+    requested = Decimal(days) if days is not None else Decimal((end_date - start_date).days + 1)
+    available = entitlement.effective_remaining_days
+    if count_pending:
+        pending_qs = LeaveRequest.objects.filter(
+            employee=employee, leave_type=leave_type, status='pending', start_date__year=start_date.year)
+        if exclude_request_id is not None:
+            pending_qs = pending_qs.exclude(pk=exclude_request_id)
+        available -= sum((r.days or Decimal('0') for r in pending_qs), Decimal('0'))
+    extra = requested - max(available, Decimal('0'))
+    return min(max(extra, Decimal('0')), requested)
+
+
+def check_overflow_target(employee, target, extra_days, year):
+    """Raise ValueError unless `target` may absorb `extra_days` extra sick
+    days: it must be Annual or Unpaid, and Annual must have enough days
+    left (HR: the approver is stopped and consults HR otherwise). Live, so
+    an HR change to the Annual entitlement is respected too."""
+    from decimal import Decimal
+    from .models import LeaveEntitlement, LeaveRequest
+
+    if target is None or target.code not in OVERFLOW_TARGET_CODES:
+        raise ValueError('Choose whether the extra sick days are taken from Annual or Unpaid leave.')
+    if target.code in UNLIMITED_TARGET_CODES:
+        return
+    entitlement = LeaveEntitlement.objects.filter(employee=employee, leave_type=target, year=year).first()
+    available = Decimal('0')
+    if entitlement is not None:
+        pending = sum((r.days or Decimal('0') for r in LeaveRequest.objects.filter(
+            employee=employee, leave_type=target, status='pending', start_date__year=year)), Decimal('0'))
+        available = entitlement.effective_remaining_days - pending
+    if available < extra_days:
+        raise ValueError(
+            f'{employee.full_name} has only {format_days(max(available, Decimal("0")))} day(s) of '
+            f'{target.name} leave left in {year}, not enough to cover the {format_days(extra_days)} extra '
+            'sick day(s). '
+            'Please consult HR before approving.')
+
 
 def validate_leave_submission(employee, leave_type, start_date, end_date, lock=False, exclude_request_id=None):
     """Raises ValueError if this leave submission is invalid:
@@ -54,7 +155,10 @@ def validate_leave_submission(employee, leave_type, start_date, end_date, lock=F
     available_days = entitlement.effective_remaining_days - pending_days
 
     exceeds_balance = False
-    if requested_days > available_days:
+    # Sick leave past the allowance goes through: the approver charges the
+    # extra days to Annual or Unpaid (see overflow_days), so it is neither
+    # refused nor held here.
+    if requested_days > available_days and not allows_overflow(leave_type):
         config = OverrideAccessSettings.get_solo()
         if config.balance_hold_enabled_for(employee.work_location):
             exceeds_balance = True
@@ -95,6 +199,10 @@ def preview_leave_shortfall(employee, leave_type, start_date, end_date):
     from decimal import Decimal
     from .models import LeaveEntitlement, LeaveRequest
 
+    # Extra sick days are charged to Annual/Unpaid on approval, not granted
+    # as exception days - so no "Log Anyway" shortfall for sick leave.
+    if allows_overflow(leave_type):
+        return Decimal('0')
     entitlement = LeaveEntitlement.objects.filter(
         employee=employee, leave_type=leave_type, year=start_date.year).first()
     if entitlement is None:
