@@ -146,6 +146,53 @@ def commitment(purchase_orders, rates=None):
     return {'committed': committed, 'draft': draft, 'converted': converted}
 
 
+def commitment_for_items(po_items, rates=None):
+    """The same split as `commitment`, but for a chosen set of PO line items.
+
+    A purchase order is not all budget. `PurchaseOrderItemForm` does not expose
+    `source_bom_item` and the Excel importer never sets it, so a PO raised from
+    a budget can carry further lines that were never on one — freight, an extra
+    material — and those are not spend against the budget.
+    `PurchaseOrder.budget_breakdown` already counts only the budget-sourced
+    lines of a single order; this is that same rule across a whole budget's
+    worth of them, so the tracker's Remaining Budget and the PO detail page's
+    Budget vs Actual cannot report different figures for the same money.
+
+    An order's discount is a percentage of its whole base amount, so a subset
+    of its lines carries its share of it. Given every line of a PO that
+    reproduces `gross_value` exactly, which is what keeps this and
+    `commitment` one rule rather than two.
+    """
+    rates = exchange_rates() if rates is None else rates
+    committed = draft = Decimal('0')
+    converted = False
+
+    for item in po_items:
+        po = item.purchase_order
+        if po.status in COMMITTED_STATUSES:
+            bucket = 'committed'
+        elif po.status in PENDING_STATUSES:
+            bucket = 'draft'
+        else:
+            continue                      # cancelled — commits nothing
+
+        currency = (po.currency or BASE_CURRENCY).upper()
+        # Ex-VAT, for the reason given at the top of this module. The discount
+        # is taken and rounded the way PurchaseOrder.discount_amount takes it,
+        # one line at a time, so the figures stay in whole cents.
+        discount = (item.total_value * (po.discount_rate or Decimal('0'))
+                    / Decimal('100')).quantize(Decimal('0.01'))
+        amount = to_base_currency(item.total_value - discount, currency, rates)
+        if currency != BASE_CURRENCY:
+            converted = True
+        if bucket == 'committed':
+            committed += amount
+        else:
+            draft += amount
+
+    return {'committed': committed, 'draft': draft, 'converted': converted}
+
+
 def budget_status(budget, purchase_orders, rates=None):
     """Where a project stands against its approved budget.
 
