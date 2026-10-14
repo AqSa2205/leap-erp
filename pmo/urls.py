@@ -6,6 +6,8 @@ app_name = 'pmo'
 
 urlpatterns = [
     path('', views.board, name='board'),
+    path('board/export/', views.board_export_excel, name='board_export_excel'),
+    path('board/<int:pk>/comment/', views.board_comment, name='board_comment'),
     path('project/<int:pk>/', views.project_detail, name='project_detail'),
     path('milestone/<int:pk>/progress/', views.update_progress, name='update_progress'),
     path('import/', views.milestone_import, name='milestone_import'),

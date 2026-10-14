@@ -7,14 +7,22 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
         <h4 class="mb-0"><i class="bi bi-kanban me-2"></i>Delivery Board</h4>
+        <div class="small fw-semibold">As of {{ as_of|date:"d M Y" }}</div>
         <div class="small text-muted">
-            Completion, cash in and cash out are all derived from the milestones,
-            finance's payment records and the purchase orders. Nothing on this page is typed.
+            Completion and Cash In come from the milestones and finance's payment records;
+            Cash Out from finance's cash outflow schedule (payments due to date, ex-VAT);
+            Budget Status compares committed purchase orders with the finance-approved budget.
+            Only the Comment column is typed.
         </div>
     </div>
+    <div class="d-flex gap-2">
+    <a href="{% url 'pmo:board_export_excel' %}" class="btn btn-outline-success btn-sm">
+        <i class="bi bi-file-earmark-excel me-1"></i> Export to Excel
+    </a>
     <a href="{% url 'pmo:pm_dashboard_index' %}" class="btn btn-outline-dark btn-sm">
         <i class="bi bi-file-earmark-text me-1"></i> PM Dashboard (PO, BOQ, matrices)
     </a>
+    </div>
 </div>
 
 {% comment %} Shown at the top rather than beside the project, because a wrong
@@ -32,7 +40,7 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
 {% endif %}
 
 <div class="row g-3 mb-3">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card h-100">
             <div class="card-body">
                 <div class="small text-muted">Total Cash In</div>
@@ -41,7 +49,7 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card h-100">
             <div class="card-body">
                 <div class="small text-muted">Total Cash Out</div>
@@ -50,7 +58,18 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="small text-muted">Total Budget</div>
+                <div class="h4 mb-0">SAR {{ total_budget|floatformat:2|intcomma }}</div>
+                <div class="small {% if over_budget_count %}text-danger fw-semibold{% else %}text-muted{% endif %}">
+                    {% if over_budget_count %}{{ over_budget_count }} project{{ over_budget_count|pluralize }} over budget{% else %}Finance-approved costing sheets.{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
         <div class="card h-100">
             <div class="card-body">
                 <div class="small text-muted">Net</div>
@@ -80,8 +99,13 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                     <th class="text-end">PO Value</th>
                     <th class="text-end">Cash In</th>
                     <th class="text-end">Cash Out</th>
+                    <th class="text-end">Budget</th>
+                    <th>Budget Status</th>
                     <th class="text-end">Net</th>
+                    <th>Financial Status</th>
                     <th>Last update</th>
+                    <th>Status</th>
+                    <th>Comment</th>
                 </tr>
             </thead>
             <tbody>
@@ -122,10 +146,13 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                     <td class="small">{{ row.action_by|default:"—" }}</td>
                     <td class="text-end">{% if row.po_value %}{{ row.po_value|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
                     <td class="text-end">{{ row.cash_in|floatformat:2|intcomma }}</td>
-                    <td class="text-end">{{ row.cash_out|floatformat:2|intcomma }}</td>
-                    <td class="text-end {% if row.net < 0 %}text-danger{% else %}text-success{% endif %}">
+                    <td class="text-end">{% if can_open_finance %}<a href="{% url 'finance:cash_outflow' row.project.pk %}" title="Open this project's cash outflow in Finance">{{ row.cash_out|floatformat:2|intcomma }}</a>{% else %}{{ row.cash_out|floatformat:2|intcomma }}{% endif %}</td>
+                    <td class="text-end">{% if row.budget is not None %}{{ row.budget|floatformat:2|intcomma }}{% else %}<span class="text-muted small">No approved budget</span>{% endif %}</td>
+                    <td class="small fw-semibold text-nowrap {% if row.budget_status == 'over' %}table-danger text-danger{% elif row.budget_status == 'none' %}text-muted fw-normal{% else %}table-success text-success{% endif %}">{{ row.budget_status_label }}</td>
+                    <td class="text-end fw-semibold {% if row.financial_status == 'negative' %}table-danger text-danger{% elif row.financial_status == 'positive' %}table-success text-success{% else %}text-muted{% endif %}">
                         {{ row.net|floatformat:2|intcomma }}
                     </td>
+                    <td class="small fw-semibold text-nowrap {% if row.financial_status == 'negative' %}table-danger text-danger{% elif row.financial_status == 'positive' %}table-success text-success{% else %}text-muted fw-normal{% endif %}">{{ row.financial_status_label }}</td>
                     {% comment %} A real timestamp, or an honest blank. The
                     workbook's equivalent was TODAY(), so a project untouched
                     since March still reported as updated this morning.
@@ -137,10 +164,12 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
                         <span class="text-muted">never</span>
                         {% endif %}
                     </td>
+                <td class="small">{% if row.project.status %}<span class="badge" style="background: {{ row.project.status.color|default:'#6c757d' }};">{{ row.project.status.name }}</span>{% else %}<span class="text-muted">&mdash;</span>{% endif %}</td>
+                    <td class="small" style="min-width:200px; white-space:pre-line;"{% if row.comment_updated_by %} title="Updated by {{ row.comment_updated_by }} on {{ row.comment_updated_at|date:'d M Y H:i' }}"{% endif %}>{{ row.comment }}{% if can_comment %}<button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline js-edit-comment" data-url="{% url 'pmo:board_comment' row.project.pk %}" data-name="{{ row.project.project_name }}" data-comment="{{ row.comment }}" title="Edit comment"><i class="bi bi-pencil-square"></i></button>{% endif %}</td>
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="14" class="text-center text-muted py-4">
+                    <td colspan="19" class="text-center text-muted py-4">
                         No projects to show.
                     </td>
                 </tr>
@@ -149,4 +178,39 @@ a board scans the numbers, not the warnings beside them. {% endcomment %}
         </table>
     </div>
 </div>
+
+{% if can_comment %}
+<div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" class="modal-content" id="commentForm">
+            {% csrf_token %}
+            <div class="modal-header">
+                <h6 class="modal-title">Comment: <span id="commentProject"></span></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <textarea name="comment" id="commentText" class="form-control" rows="4" maxlength="1000"></textarea>
+                <div class="form-text">Up to 1000 characters. Leave empty to clear the comment.</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-dark btn-sm">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var modal = new bootstrap.Modal(document.getElementById('commentModal'));
+    document.querySelectorAll('.js-edit-comment').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.getElementById('commentForm').action = btn.dataset.url;
+            document.getElementById('commentProject').textContent = btn.dataset.name;
+            document.getElementById('commentText').value = btn.dataset.comment || '';
+            modal.show();
+        });
+    });
+});
+</script>
+{% endif %}
 {% endblock %}
