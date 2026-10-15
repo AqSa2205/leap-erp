@@ -485,6 +485,11 @@ def sheet_budget(request, sheet_pk):
     from costing.models import ExchangeRate
     sheet = get_object_or_404(
         CostingSheet.objects.select_related('project', 'project__region'), pk=sheet_pk)
+    # Over-budget flags per line, the same ones the procurement tracker shows.
+    from procurement.budget_overrun import line_flags
+    overrun_flags = line_flags(sheet)
+    from procurement.budget_overrun import approved_overruns
+    approved_extra = approved_overruns(sheet)
     if not _can_finance(request.user):
         messages.error(request, 'Finance access is limited to the finance team.')
         return redirect('dashboard:index')
@@ -612,6 +617,8 @@ def sheet_budget(request, sheet_pk):
                        item, item.base_total_price,
                        item.effective_discount_pct * Decimal('100'),
                        item.effective_margin * Decimal('100'))
+            row['overrun_status'] = overrun_flags.get(item.pk)
+            row['approved_overrun'] = approved_extra.get(item.pk)
             lines.append(row)
             # Sub items procurement adds after approval are shown here (so
             # finance can see what was added) but never counted toward the
@@ -658,6 +665,9 @@ def sheet_budget(request, sheet_pk):
         'variance_total': price_total - sales_total,
         'editable': editable, 'can_approve': can_approve,
         'sub_item_count': sub_item_count,
+        # Shown beside the budgeted price, never added into it.
+        'approved_overrun_total': sum(approved_extra.values(), Decimal('0')),
+        'price_with_overruns': price_total + sum(approved_extra.values(), Decimal('0')),
     })
 
 

@@ -97,6 +97,9 @@
                                 {% else %}
                                 <span class="badge bg-secondary">{{ po.get_status_display }}</span>
                                 {% endif %}
+                                {% if po.has_open_overrun %}<div class="mt-1"><span class="badge bg-danger" title="An over-budget approval is waiting for remarks or a COO decision."><i class="bi bi-exclamation-octagon-fill me-1"></i>Over budget</span></div>{% endif %}
+                                {% if not po.has_budget_link and po.status != 'cancelled' %}<div class="mt-1"><span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="Not linked to any approved budget. It still goes through the normal approvals.">Not linked to budget</span></div>{% endif %}
+                                
                             </td>
                             {% comment %} Which stage the PO is actually waiting
                             on. Derived from current_stage, the same source the
