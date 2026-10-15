@@ -26,7 +26,7 @@ from .forms import (
     AttendanceSettingsForm, LeaveRequestForm, AttendanceExceptionForm,
     EmployeeHierarchyForm, ExceptionGrantForm,
 )
-from .leave_services import generate_year_entitlements
+from .leave_services import generate_year_entitlements, OVERFLOW_CHANGE_NOTE
 from .attendance_services import derive_status
 from .attendance_matrix import period_range, build_matrix, display_status_no_record, cell_time_lines
 from .scoping import scoped_employee_ids, scope_employee_queryset, scope_asset_queryset, can_manage_hr_scoped
@@ -448,13 +448,14 @@ def my_profile(request):
                 context['leave_request_submit_failed'] = True
             else:
                 try:
-                    submit_leave_request(
+                    new_request = submit_leave_request(
                         employee=emp, leave_type=form.cleaned_data['leave_type'],
                         start_date=form.cleaned_data['start_date'], end_date=form.cleaned_data['end_date'],
                         employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
                         created_by=request.user, replacement=form.cleaned_data.get('replacement'),
                     )
-                    messages.success(request, 'Leave request submitted and sent for approval.')
+                    messages.success(request, 'Leave request submitted and sent for approval.'
+                                     + _sick_overflow_notice(new_request, 'your'))
                     return redirect('hr:my_profile')
                 except ValueError as exc:
                     # The form already passed its own (unlocked) balance/overlap
@@ -677,6 +678,11 @@ def my_profile(request):
         context['leave_cooldown'] = next(
             (cd for cd in (annual_leave_cooldown(emp, e.leave_type, today=today) for e in accumulative) if cd),
             None)
+        # Sick allowance used up: tell the employee up front that further sick
+        # days will be adjusted from their other leave. Read live from the
+        # entitlement, so an HR change to the allowance shows straight away.
+        from hr.leave_services import sick_allowance_used_up
+        context['sick_allowance_used'] = sick_allowance_used_up(emp, today.year)
         context['leave_total_entitled'] = sum((e.entitled_days for e in accumulative), Decimal('0'))
         context['leave_total_remaining'] = sum((e.remaining_days for e in accumulative), Decimal('0'))
         context['leave_total_exception'] = sum((e.exception_days for e in accumulative), Decimal('0'))
@@ -2768,10 +2774,16 @@ class LeaveRecordDeleteView(AdminRequiredMixin, DeleteView):
 
     def form_valid(self, form):
         # Capture the range before the delete, then re-derive those days so
-        # they fall back from 'leave' to present/late/absent.
+        # they fall back from 'leave' to present/late/absent. Deleting the
+        # leave of a request also removes the extra sick days it charged to
+        # Annual/Unpaid, or those balances would stay deducted.
         emp, start, end = self.object.employee, self.object.start_date, self.object.end_date
+        extra = list(LeaveRecord.objects.filter(overflow_for__leave_record=self.object))
         response = super().form_valid(form)
         from hr.attendance_services import sync_attendence_with_leave
+        for lr in extra:
+            end = max(end, lr.end_date)
+            lr.delete()
         sync_attendence_with_leave(emp, start, end)
         return response
 
@@ -2923,6 +2935,20 @@ class LeaveRequestListView(SuperAdminRequiredMixin, ListView):
         return redirect('hr:leave_request_list')
 
 
+def _sick_overflow_notice(leave_request, whose):
+    """Disclaimer added after submitting a sick leave that goes past the
+    allowance. Says how many days and that they come from other leave, but
+    never which type - HR's rule is that the employee isn't told."""
+    from hr.leave_services import overflow_days, format_days
+    extra = overflow_days(leave_request.employee, leave_request.leave_type, leave_request.start_date,
+                          leave_request.end_date, days=leave_request.days,
+                          exclude_request_id=leave_request.pk)
+    if not extra:
+        return ''
+    return (f' {format_days(extra)} day(s) of this request are beyond {whose} remaining sick leave for '
+            f'{leave_request.start_date.year}, so they will be adjusted from other leave, such as annual leave.')
+
+
 def _loggable_employees(user, queryset=None):
     """Who `user` may log leave for: the union of their Role-based team scope
     and their own live direct reports. A scoped role (or plain manager) thus
@@ -2940,8 +2966,10 @@ def _loggable_employees(user, queryset=None):
 
 @login_required
 def leave_replacement_options(request):
-    """JSON options for the replacement dropdown on Log Leave Request - the
-    team of the employee just picked there. Same access as that page."""
+    """What Log Leave Request needs once an employee is picked: the options
+    for the replacement dropdown (their team), and - if their sick leave for
+    this year is used up - the notice to show while Sick is selected. Same
+    access as that page."""
     if not (can_manage_hr_scoped(request.user) or is_direct_manager_of_anyone(request.user)):
         raise PermissionDenied
     raw = request.GET.get('employee', '')
@@ -2949,8 +2977,18 @@ def leave_replacement_options(request):
     # 'for' echoes the request so the page can drop a stale reply when the
     # employee was changed again before this one came back.
     if emp is None:
-        return JsonResponse({'for': raw, 'options': []})
-    return JsonResponse({'for': raw, 'options': [
+        return JsonResponse({'for': raw, 'options': [], 'sick_used_up': None})
+    from hr.leave_services import sick_allowance_used_up, format_days
+    used_up = sick_allowance_used_up(emp, timezone.localdate().year)
+    sick_notice = None
+    if used_up is not None:
+        sick_notice = {
+            'leave_type_id': used_up.leave_type_id,
+            'message': (f'{emp.full_name} has used all {format_days(used_up.effective_entitled_days)} days of '
+                        f'their sick leave for {used_up.year}. Any further sick days will be adjusted from '
+                        'their other leave, such as annual leave.'),
+        }
+    return JsonResponse({'for': raw, 'sick_used_up': sick_notice, 'options': [
         {'id': p.pk, 'name': p.full_name} for p in emp.replacement_candidates()]})
 
 
@@ -3058,11 +3096,14 @@ class LeaveRequestCreateView(HRScopedAccessMixin, FormView):
                         reason=f'Auto-granted via Log Request by '
                                f'{self.request.user.get_full_name() or self.request.user.username} to allow a '
                                f'{start_date}–{end_date} request that exceeded the balance by {shortfall} day(s).')
-            submit_leave_request(
+            new_request = submit_leave_request(
                 employee=employee, leave_type=leave_type, start_date=start_date, end_date=end_date,
                 employee_reason=form.cleaned_data['employee_reason'], document=form.cleaned_data['document'],
                 created_by=self.request.user, replacement=form.cleaned_data.get('replacement'),
             )
+            overflow_notice = _sick_overflow_notice(new_request, f"{employee.full_name}'s")
+            if overflow_notice:
+                messages.warning(self.request, overflow_notice.strip())
         except ValueError as exc:
             # The form already passed its own (unlocked) balance/overlap
             # check — reaching here means submit_leave_request's locked,
@@ -3425,6 +3466,7 @@ def attendance_matrix_export_excel(request):
     COLOR_EID = 'FFFF00'
     COLOR_OTHER = 'BDD7EE'  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
     COLOR_SICK = 'E75480'  # pink - matches the register's S badge, so paid sick days never read as an absence
+    COLOR_SICK_UNPAID = '9E4A75'  # dark plum - sick days past the allowance taken as unpaid (salary deduction)
 
     def fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3441,6 +3483,8 @@ def attendance_matrix_export_excel(request):
         if status == 'leave':
             if cell_data.get('leave_code') == 'sick':
                 return COLOR_SICK
+            if cell_data.get('leave_code') == 'sick_unpaid':
+                return COLOR_SICK_UNPAID
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3487,7 +3531,7 @@ def attendance_matrix_export_excel(request):
         ws.cell(row=row, column=1, value=r['employee'].full_name).border = thin_border
         for col, cell_data in enumerate(r['cells'], 2):
             # Sick leave gets its own letter, same as the register's S badge.
-            label = 'S' if cell_data.get('leave_code') == 'sick' else status_labels.get(cell_data['status'], cell_data['status'])
+            label = {'sick': 'S', 'sick_unpaid': 'U'}.get(cell_data.get('leave_code')) or status_labels.get(cell_data['status'], cell_data['status'])
             # Stack the check-in (and check-out) time beneath the status letter,
             # e.g. "P" over "09:12-17:30". Non-present days keep just the letter.
             times = cell_time_lines(cell_data)
@@ -3566,6 +3610,7 @@ def attendance_matrix_export_pdf(request):
     COLOR_EID = colors.HexColor('#FFFF00')
     COLOR_OTHER = colors.HexColor('#BDD7EE')  # light blue - shared fallback for WFH, other leave types, and ungrouped holidays
     COLOR_SICK = colors.HexColor('#E75480')  # pink - matches the register's S badge, so paid sick days never read as an absence
+    COLOR_SICK_UNPAID = colors.HexColor('#9E4A75')  # dark plum - sick days past the allowance taken as unpaid (salary deduction)
 
     def pdf_fill_for(cell_data, emp_id):
         status = cell_data['status']
@@ -3582,6 +3627,8 @@ def attendance_matrix_export_pdf(request):
         if status == 'leave':
             if cell_data.get('leave_code') == 'sick':
                 return COLOR_SICK
+            if cell_data.get('leave_code') == 'sick_unpaid':
+                return COLOR_SICK_UNPAID
             code = leave_type_map.get((emp_id, cell_data['date']))
             if code == 'annual':
                 return COLOR_ANNUAL_LEAVE
@@ -3616,7 +3663,7 @@ def attendance_matrix_export_pdf(request):
         row_data = [Paragraph(r['employee'].full_name, name_style)]
         for col_idx, c in enumerate(r['cells'], 1):
             # Sick leave gets its own letter, same as the register's S badge.
-            label = 'S' if c.get('leave_code') == 'sick' else status_labels.get(c['status'], c['status'])
+            label = {'sick': 'S', 'sick_unpaid': 'U'}.get(c.get('leave_code')) or status_labels.get(c['status'], c['status'])
             times = cell_time_lines(c)
             # Stack the status letter over the check-in/out times, each on its
             display_lines = list(times)
@@ -3728,7 +3775,7 @@ def attendance_unmark_leave(request):
     # Deleting it from here refunded the balance while the request still read
     # "Approved" - and certificate-required leave (Sick) could not be put back
     # from the register. Revoke keeps the request and the leave in step.
-    if LeaveRequest.objects.filter(leave_record=lr).exists():
+    if lr.overflow_for_id or LeaveRequest.objects.filter(leave_record=lr).exists():
         return JsonResponse({'error': 'This leave was approved through a leave request — '
                                       'revoke it from the request instead.'}, status=400)
 
@@ -3830,6 +3877,21 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
             ctx['entitlement'] = LeaveEntitlement.objects.filter(
                 employee=self.object.employee, leave_type=self.object.leave_type,
                 year=self.object.start_date.year).first()
+        # Sick leave past the allowance: the banner says how many days are
+        # extra (live while pending) and the approve forms ask whether they
+        # come from Annual or Unpaid.
+        if self.object.sick_overflow_days:
+            from hr.leave_services import overflow_target_choices
+            ctx['sick_entitlement'] = LeaveEntitlement.objects.filter(
+                employee=self.object.employee, leave_type=self.object.leave_type,
+                year=self.object.start_date.year).first()
+            ctx['overflow_choices'] = overflow_target_choices()
+            ctx['overflow_charged'] = self.object.overflow_records.select_related('leave_type')
+            # Who changed an earlier approver's pick, shown in the banner. Kept
+            # off the page for the employee - they're never told the type.
+            if not ctx['is_own_request']:
+                ctx['overflow_changes'] = self.object.notes.filter(
+                    is_internal=True, note__contains=OVERFLOW_CHANGE_NOTE).order_by('created_at')
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -3844,11 +3906,13 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
             try:
                 if approval.decision == 'pending':
                     record_approver_decision(self.object, request.user, request.POST.get('decision'),
-                                             comment=request.POST.get('comment', ''))
+                                             comment=request.POST.get('comment', ''),
+                                             overflow_leave_type_id=request.POST.get('overflow_leave_type'))
                     messages.success(request, 'Your decision has been recorded.')
                 else:
                     edit_approver_decision(self.object, request.user, request.POST.get('decision'),
-                                           edit_note=request.POST.get('edit_note', ''))
+                                           edit_note=request.POST.get('edit_note', ''),
+                                           overflow_leave_type_id=request.POST.get('overflow_leave_type'))
                     messages.success(request, 'Your decision has been updated.')
             except ValueError as exc:
                 messages.error(request, str(exc))
@@ -3858,7 +3922,8 @@ class LeaveRequestDetailView(SuperAdminRequiredMixin, DetailView):
                 return HttpResponse('You do not have override access for this request.', status=403)
             try:
                 override_finalize(self.object, request.user, request.POST.get('decision'),
-                                  request.POST.get('reason', ''))
+                                  request.POST.get('reason', ''),
+                                  overflow_leave_type_id=request.POST.get('overflow_leave_type'))
                 messages.success(request, 'Request finalized via override.')
             except ValueError as exc:
                 messages.error(request, str(exc))

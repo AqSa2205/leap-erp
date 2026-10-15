@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.utils.functional import cached_property
 
 
 class LeaveType(models.Model):
@@ -138,6 +139,12 @@ class LeaveRecord(models.Model):
         help_text='Required for leave types that mandate a medical certificate (e.g. Sick).')
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     created_at = models.DateTimeField(auto_now_add=True)
+    overflow_for = models.ForeignKey(
+        'hr.LeaveRequest', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='overflow_records',
+        help_text='Set when this record holds the extra days of a sick leave that went past the '
+                  "employee's sick allowance, charged to Annual or Unpaid by the approver. The days "
+                  'are still sick days: the register shows them as sick.')
 
     class Meta:
         ordering = ['-start_date']
@@ -297,6 +304,11 @@ class LeaveRequest(models.Model):
                   'changes later.')
     leave_record = models.OneToOneField(LeaveRecord, on_delete=models.SET_NULL, null=True, blank=True,
                                         related_name='source_request')
+    overflow_leave_type = models.ForeignKey(
+        LeaveType, on_delete=models.PROTECT, null=True, blank=True, related_name='+',
+        help_text='For a sick leave that goes past the sick allowance: which leave type (Annual or '
+                  'Unpaid) the extra days are charged to. Picked by the first approver; a later '
+                  'approver can change it. Never shown to the employee.')
     salary_deduction_applicable = models.BooleanField(default=False)
     salary_deduction_note = models.TextField(blank=True)
     is_overridden = models.BooleanField(default=False)
@@ -343,6 +355,21 @@ class LeaveRequest(models.Model):
         """Users whose decision is still outstanding (used for the employee-facing
         'Pending — waiting on X' message)."""
         return [a.approver for a in self.approvals.filter(decision='pending')]
+
+    @cached_property
+    def sick_overflow_days(self):
+        """Days of this request beyond the employee's sick allowance. While
+        pending it's worked out live from the current entitlement, so an HR
+        change to the allowance is reflected straight away; once approved
+        it's what was actually charged (an approved split is never redone)."""
+        from decimal import Decimal
+        if self.status == 'approved':
+            return sum((r.days or Decimal('0') for r in self.overflow_records.all()), Decimal('0'))
+        if self.status != 'pending':
+            return Decimal('0')
+        from hr.leave_services import overflow_days
+        return overflow_days(self.employee, self.leave_type, self.start_date, self.end_date,
+                             days=self.days, exclude_request_id=self.pk, count_pending=False)
 
     @property
     def is_backdated(self):

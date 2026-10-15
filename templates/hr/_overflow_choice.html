@@ -1,0 +1,32 @@
+{# Where the extra days of a sick leave past the allowance come from. Only Annual or Unpaid (HR's rule). Pre-selects an earlier approver's pick, which this approver may change - a yellow warning appears only when they pick something different. #}
+{% if leave_request.sick_overflow_days and overflow_choices %}
+<div class="mb-2 overflow-choice" data-earlier="{{ leave_request.overflow_leave_type_id|default_if_none:'' }}">
+  <label class="form-label small fw-semibold mb-1">Take the {{ leave_request.sick_overflow_days|floatformat }} extra sick day(s) from</label>
+  <select name="overflow_leave_type" class="form-select form-select-sm" style="max-width:260px;">
+    <option value="">Choose when approving</option>
+    {% for t in overflow_choices %}
+    <option value="{{ t.pk }}" {% if t.pk == leave_request.overflow_leave_type_id %}selected{% endif %}>{{ t.name }}</option>
+    {% endfor %}
+  </select>
+  {% if leave_request.overflow_leave_type %}
+  <div class="alert alert-warning py-1 px-2 small mt-2 mb-0 d-none overflow-change-warning">
+    An earlier approver chose <strong>{{ leave_request.overflow_leave_type.name }}</strong>. If you approve, the extra days
+    will be taken from <strong class="overflow-new"></strong> instead, and the change is recorded on this request.
+  </div>
+  {% endif %}
+</div>
+<script>
+(function (wrap) {
+    // Warn only when this approver's pick differs from the earlier approver's.
+    var select = wrap.querySelector('select'), warn = wrap.querySelector('.overflow-change-warning');
+    if (!warn || !wrap.dataset.earlier) return;
+    function sync() {
+        var differs = select.value && select.value !== wrap.dataset.earlier;
+        warn.classList.toggle('d-none', !differs);
+        if (differs) warn.querySelector('.overflow-new').textContent = select.options[select.selectedIndex].text;
+    }
+    select.addEventListener('change', sync);
+    sync();
+})(document.currentScript.previousElementSibling);
+</script>
+{% endif %}

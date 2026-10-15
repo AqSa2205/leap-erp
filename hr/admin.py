@@ -53,15 +53,17 @@ class LeaveRecordAdmin(admin.ModelAdmin):
         sync_attendence_with_leave(obj.employee, obj.start_date, obj.end_date)
 
     def delete_model(self, request, obj):
-        from hr.attendance_services import sync_attendence_with_leave
-        emp, start, end = obj.employee, obj.start_date, obj.end_date
-        super().delete_model(request, obj)
-        sync_attendence_with_leave(emp, start, end)
+        self.delete_queryset(request, LeaveRecord.objects.filter(pk=obj.pk))
 
     def delete_queryset(self, request, queryset):
+        # Deleting a request's leave also removes the extra sick days it
+        # charged to Annual/Unpaid, or those balances would stay deducted.
         from hr.attendance_services import sync_attendence_with_leave
-        ranges = [(lr.employee, lr.start_date, lr.end_date) for lr in queryset.select_related('employee')]
-        super().delete_queryset(request, queryset)
+        records = list(queryset.select_related('employee'))
+        records += list(LeaveRecord.objects.filter(overflow_for__leave_record__in=records)
+                        .exclude(pk__in=[lr.pk for lr in records]).select_related('employee'))
+        ranges = [(lr.employee, lr.start_date, lr.end_date) for lr in records]
+        LeaveRecord.objects.filter(pk__in=[lr.pk for lr in records]).delete()
         for emp, start, end in ranges:
             sync_attendence_with_leave(emp, start, end)
 

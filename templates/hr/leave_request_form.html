@@ -24,6 +24,10 @@
             {% if form.employee.errors %}<div class="invalid-feedback d-block">{{ form.employee.errors.0 }}</div>{% endif %}</div>
           <div class="mb-3"><label class="form-label">Leave Type *</label>{{ form.leave_type }}
             {% if form.leave_type.errors %}<div class="invalid-feedback d-block">{{ form.leave_type.errors.0 }}</div>{% endif %}</div>
+          {# Filled and shown by the script below: the picked employee's sick leave is used up and Sick is selected. #}
+          <div class="alert alert-warning py-2 small mb-3 d-none" id="sickUsedUpNotice">
+            <i class="bi bi-exclamation-triangle me-1"></i><span class="notice-text"></span>
+          </div>
           <div class="row">
             <div class="col-md-6 mb-3"><label class="form-label">Start Date *</label>{{ form.start_date }}
               {% if form.start_date.errors %}<div class="invalid-feedback d-block">{{ form.start_date.errors.0 }}</div>{% endif %}</div>
@@ -34,7 +38,7 @@
             {% if form.employee_reason.errors %}<div class="invalid-feedback d-block">{{ form.employee_reason.errors.0 }}</div>{% endif %}</div>
           {# Hidden until the picked employee has a team to choose from - filled by the script below. #}
           <div class="mb-3{% if not form.fields.replacement.queryset %} d-none{% endif %}" id="replacementWrap">
-            <label class="form-label">Replacement * <span class="text-muted small">(who covers while they're away)</span></label>{{ form.replacement }}
+            <label class="form-label">Replacement <span class="text-muted small">(who covers while they're away; required unless the leave has already started)</span></label>{{ form.replacement }}
             {% if form.replacement.errors %}<div class="invalid-feedback d-block">{{ form.replacement.errors.0 }}</div>{% endif %}</div>
           <div class="mb-4"><label class="form-label">Document (optional)</label>{{ form.document }}
             {% if form.document.errors %}<div class="invalid-feedback d-block">{{ form.document.errors.0 }}</div>{% endif %}</div>
@@ -55,31 +59,57 @@
 </div>
 <script>
 (function () {
-    // Reload the replacement choices for whichever employee is picked. The
-    // server re-checks the pick against that same team on submit.
+    // Once an employee is picked, load their replacement choices (the server
+    // re-checks the pick on submit) and whether their sick leave is used up -
+    // that notice shows only while Sick is the selected leave type.
     var empSelect = document.getElementById('{{ form.employee.id_for_label }}');
     var repSelect = document.getElementById('{{ form.replacement.id_for_label }}');
+    var typeSelect = document.getElementById('{{ form.leave_type.id_for_label }}');
     var wrap = document.getElementById('replacementWrap');
+    var notice = document.getElementById('sickUsedUpNotice');
     if (!empSelect || !repSelect) return;
     var URL = "{% url 'hr:leave_replacement_options' %}";
+    var sickUsedUp = null;
+
+    function syncNotice() {
+        var show = !!(sickUsedUp && typeSelect && typeSelect.value === String(sickUsedUp.leave_type_id));
+        if (show) notice.querySelector('.notice-text').textContent = sickUsedUp.message;
+        notice.classList.toggle('d-none', !show);
+    }
+
+    function load(employeeId) {
+        return fetch(URL + '?employee=' + encodeURIComponent(employeeId), {credentials: 'same-origin'})
+            .then(function (r) { return r.ok ? r.json() : {options: [], sick_used_up: null}; })
+            .then(function (data) {
+                if (String(data.for) !== empSelect.value) return null;  // a newer pick is in flight
+                sickUsedUp = data.sick_used_up;
+                syncNotice();
+                return data;
+            });
+    }
+
     empSelect.addEventListener('change', function () {
         var picked = repSelect.value;
         repSelect.length = 1;  // keep only the "— Select replacement —" option
         repSelect.value = '';
         wrap.classList.add('d-none');
+        sickUsedUp = null;
+        syncNotice();
         if (!empSelect.value) return;
-        fetch(URL + '?employee=' + encodeURIComponent(empSelect.value), {credentials: 'same-origin'})
-            .then(function (r) { return r.ok ? r.json() : {options: []}; })
-            .then(function (data) {
-                if (String(data.for) !== empSelect.value) return;  // a newer pick is in flight
-                data.options.forEach(function (o) {
-                    var opt = new Option(o.name, o.id);
-                    if (String(o.id) === picked) opt.selected = true;
-                    repSelect.add(opt);
-                });
-                wrap.classList.toggle('d-none', data.options.length === 0);
+        load(empSelect.value).then(function (data) {
+            if (!data) return;
+            data.options.forEach(function (o) {
+                var opt = new Option(o.name, o.id);
+                if (String(o.id) === picked) opt.selected = true;
+                repSelect.add(opt);
             });
+            wrap.classList.toggle('d-none', data.options.length === 0);
+        });
     });
+    if (typeSelect) typeSelect.addEventListener('change', syncNotice);
+    // Prefilled employee (?employee=) or a form re-shown after an error: the
+    // replacement list is already rendered, so only fetch the sick status.
+    if (empSelect.value) load(empSelect.value);
 })();
 </script>
 {% endblock %}

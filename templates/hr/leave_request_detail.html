@@ -20,6 +20,30 @@
       </div>
       {% endif %}
 
+      {% if leave_request.sick_overflow_days %}
+      <div class="alert alert-warning d-flex align-items-start gap-2">
+        <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+        <div>
+          <strong>Sick leave allowance used up.</strong>
+          {% if sick_entitlement %}
+            {{ leave_request.employee.full_name }} is entitled to {{ sick_entitlement.effective_entitled_days|floatformat }}
+            sick day(s) in {{ leave_request.start_date|date:"Y" }} and has used {{ sick_entitlement.taken_days|floatformat }}.
+          {% endif %}
+          {% if leave_request.status == 'approved' %}
+            {{ leave_request.sick_overflow_days|floatformat }} day(s) of this leave went beyond the allowance{% if not is_own_request %} and were taken from
+            {% for r in overflow_charged %}{{ r.leave_type.name }}{% if not forloop.last %}, {% endif %}{% endfor %} leave{% endif %}.
+          {% else %}
+            {{ leave_request.sick_overflow_days|floatformat }} day(s) of this request are beyond the allowance and must be adjusted from
+            other leave{% if not is_own_request %}: choose Annual or Unpaid when approving{% endif %}.
+          {% endif %}
+          {% for n in overflow_changes %}
+          <div class="small mt-1"><i class="bi bi-arrow-left-right me-1"></i>{{ n.note }}
+            <span class="text-muted">({{ n.created_at|date:"d M Y, H:i" }})</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {% if is_own_request and leave_request.status == 'pending' %}
       <div class="alert alert-info d-flex align-items-start gap-2">
         <i class="bi bi-info-circle-fill mt-1"></i>
@@ -132,6 +156,7 @@
               </div>
               <div class="form-text">You can change your selection any time before submitting.</div>
             </div>
+            {% include 'hr/_overflow_choice.html' %}
             <div class="mb-2">
               <label class="form-label small fw-semibold mb-1">2. Add a message for the employee (optional)</label>
               <textarea name="comment" class="form-control" rows="2" placeholder="They'll see this on their My Profile page"></textarea>
@@ -162,6 +187,7 @@
                 <label class="form-check-label text-danger" for="edit_decision_disapproved">Disapprove</label>
               </div>
             </div>
+            {% include 'hr/_overflow_choice.html' %}
             <div class="mb-2">
               <label class="form-label small fw-semibold mb-1">2. Note explaining the change (required)</label>
               <textarea name="edit_note" class="form-control" rows="2" placeholder="Why are you changing your decision? — the employee will see this" required></textarea>
@@ -181,6 +207,7 @@
               <label class="form-label small">Override (use only if an approver is unavailable)</label>
               <textarea name="reason" class="form-control" rows="2" placeholder="Reason — required" required></textarea>
             </div>
+            {% include 'hr/_overflow_choice.html' %}
             <button type="submit" name="decision" value="approved" class="btn btn-outline-success btn-sm">Override — Approve</button>
             <button type="submit" name="decision" value="disapproved" class="btn btn-outline-danger btn-sm">Override — Disapprove</button>
           </form>

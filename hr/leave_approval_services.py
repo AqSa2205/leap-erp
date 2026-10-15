@@ -21,13 +21,49 @@ no fixed time limit, only whichever happens first: unanimous agreement, or
 someone changing their mind to match the others.
 """
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from hr.models import LeaveRecord, LeaveRequest, LeaveRevokeRequest
 from notifications.services import notify_users
 
 
-def record_approver_decision(leave_request, approver_user, decision, comment=''):
+def _apply_overflow_choice(leave_request, decision, overflow_leave_type_id=None, actor=None):
+    """When a sick leave runs past the employee's allowance, approving it
+    needs to say where the extra days come from. The first approver picks
+    Annual or Unpaid; a later approver (or an override) can change it - the
+    choice standing at final approval is what's charged. Refused when
+    Annual can't cover the days (HR: the approver consults HR instead).
+    Changing an earlier approver's pick leaves an internal note saying who
+    changed it from what, so the switch is on record for the approvers -
+    internal, because the employee is never told which type was used.
+    No-op for a disapproval or when nothing overflows."""
+    from hr.leave_services import overflow_days, check_overflow_target, OVERFLOW_CHANGE_NOTE
+    from hr.models import LeaveType
+    if decision != 'approved':
+        return
+    extra = overflow_days(leave_request.employee, leave_request.leave_type, leave_request.start_date,
+                          leave_request.end_date, days=leave_request.days,
+                          exclude_request_id=leave_request.pk, count_pending=False)
+    if not extra:
+        return
+    raw = str(overflow_leave_type_id or '')
+    target = (LeaveType.objects.filter(pk=int(raw)).first() if raw.isdigit()
+              else leave_request.overflow_leave_type)
+    check_overflow_target(leave_request.employee, target, extra, leave_request.start_date.year)
+    if leave_request.overflow_leave_type_id != target.pk:
+        previous = leave_request.overflow_leave_type
+        if previous is not None:
+            from hr.models import LeaveRequestNote
+            who = (actor.get_full_name() or actor.username) if actor else 'An approver'
+            LeaveRequestNote.objects.create(
+                leave_request=leave_request, author=actor, is_internal=True,
+                note=f'{who} {OVERFLOW_CHANGE_NOTE} {previous.name} to {target.name}.')
+        leave_request.overflow_leave_type = target
+        leave_request.save(update_fields=['overflow_leave_type', 'updated_at'])
+
+
+def record_approver_decision(leave_request, approver_user, decision, comment='', overflow_leave_type_id=None):
     if decision not in ('approved', 'disapproved'):
         raise ValueError(f"decision must be 'approved' or 'disapproved', got {decision!r}")
     if leave_request.employee.user_id and leave_request.employee.user_id == approver_user.id:
@@ -50,6 +86,7 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
     # 'pending', and record_approver_decision can never be called again for
     # it (it requires decision == 'pending').
     with transaction.atomic():
+        _apply_overflow_choice(leave_request, decision, overflow_leave_type_id, actor=approver_user)
         approval.decision = decision
         approval.comment = comment
         approval.decided_at = timezone.now()
@@ -73,7 +110,7 @@ def record_approver_decision(leave_request, approver_user, decision, comment='')
     return leave_request
 
 
-def edit_approver_decision(leave_request, approver_user, new_decision, edit_note):
+def edit_approver_decision(leave_request, approver_user, new_decision, edit_note, overflow_leave_type_id=None):
     """Let an approver change their own already-recorded decision for as
     long as the overall request is still pending (see _finalize — once
     finalized, decisions lock; there's no reversal of a created LeaveRecord
@@ -106,6 +143,7 @@ def edit_approver_decision(leave_request, approver_user, new_decision, edit_note
     # Same all-or-nothing reasoning as record_approver_decision: the edited
     # decision, its note, and finalization must roll back together on failure.
     with transaction.atomic():
+        _apply_overflow_choice(leave_request, new_decision, overflow_leave_type_id, actor=approver_user)
         approval.decision = new_decision
         approval.decided_at = timezone.now()
         approval.save(update_fields=['decision', 'decided_at'])
@@ -154,7 +192,7 @@ def _notify_after_reconcile(leave_request, actor):
         )
 
 
-def override_finalize(leave_request, superadmin_user, decision, reason):
+def override_finalize(leave_request, superadmin_user, decision, reason, overflow_leave_type_id=None):
     if decision not in ('approved', 'disapproved'):
         raise ValueError(f"decision must be 'approved' or 'disapproved', got {decision!r}")
     if not reason or not reason.strip():
@@ -165,10 +203,12 @@ def override_finalize(leave_request, superadmin_user, decision, reason):
     if leave_request.status != 'pending':
         raise ValueError(f"Request is already {leave_request.status}; nothing to override.")
 
-    leave_request.is_overridden = True
-    leave_request.overridden_by = superadmin_user
-    leave_request.override_reason = reason
-    _finalize(leave_request, decision)
+    with transaction.atomic():
+        _apply_overflow_choice(leave_request, decision, overflow_leave_type_id, actor=superadmin_user)
+        leave_request.is_overridden = True
+        leave_request.overridden_by = superadmin_user
+        leave_request.override_reason = reason
+        _finalize(leave_request, decision)
     return leave_request
 
 
@@ -200,20 +240,12 @@ def _finalize(leave_request, status):
         leave_request.status = status
         leave_request.decided_at = timezone.now()
         if status == 'approved':
-            record = LeaveRecord.objects.create(
-                employee=leave_request.employee,
-                leave_type=leave_request.leave_type,
-                start_date=leave_request.start_date,
-                end_date=leave_request.end_date,
-                days=leave_request.days,
-                note=f'Approved via leave request #{leave_request.pk}',
-            )
-            leave_request.leave_record = record
+            leave_request.leave_record = _create_approved_records(leave_request)
             # The days this leave covers may already have a stored 'absent'
             # row (sick leave is approved after the fact) - re-derive them so
             # the register shows the leave instead.
             from hr.attendance_services import sync_attendence_with_leave
-            sync_attendence_with_leave(record.employee, record.start_date, record.end_date)
+            sync_attendence_with_leave(leave_request.employee, leave_request.start_date, leave_request.end_date)
         elif status == 'disapproved':
             leave_request.salary_deduction_applicable = True
         leave_request.save(update_fields=[
@@ -227,6 +259,45 @@ def _finalize(leave_request, status):
             verb=f'Your {leave_request.leave_type.name} leave request was {verb}',
             description=leave_request.override_reason if leave_request.is_overridden else '',
         )
+
+
+def _create_approved_records(leave_request):
+    """Create the LeaveRecord(s) that deduct an approved request from the
+    employee's balance, and return the one the request links to.
+
+    Normally a single record of the request's own type. A sick leave that
+    runs past the allowance is split by date instead: the allowance is used
+    first, and the last days go to a second record of the leave type the
+    approver chose (Annual or Unpaid), linked via overflow_for. The split is
+    worked out here, at final approval, from the live entitlement - so an HR
+    change made while the request was pending is respected - and re-checked
+    against the chosen type's balance; raising rolls the whole decision back."""
+    from datetime import timedelta
+    from hr.leave_services import overflow_days, check_overflow_target
+
+    total = leave_request.days or leave_request.computed_days()
+    common = dict(employee=leave_request.employee, note=f'Approved via leave request #{leave_request.pk}')
+    extra = overflow_days(leave_request.employee, leave_request.leave_type, leave_request.start_date,
+                          leave_request.end_date, days=total, exclude_request_id=leave_request.pk,
+                          count_pending=False)
+    if not extra:
+        return LeaveRecord.objects.create(
+            leave_type=leave_request.leave_type, start_date=leave_request.start_date,
+            end_date=leave_request.end_date, days=total, **common)
+
+    target = leave_request.overflow_leave_type
+    check_overflow_target(leave_request.employee, target, extra, leave_request.start_date.year)
+    first_extra_day = leave_request.end_date - timedelta(days=int(extra) - 1)
+    allowance_record = None
+    if total > extra:
+        allowance_record = LeaveRecord.objects.create(
+            leave_type=leave_request.leave_type, start_date=leave_request.start_date,
+            end_date=first_extra_day - timedelta(days=1), days=total - extra, **common)
+    extra_record = LeaveRecord.objects.create(
+        leave_type=target, start_date=first_extra_day, end_date=leave_request.end_date,
+        days=extra, overflow_for=leave_request, employee=leave_request.employee,
+        note=f'Sick days beyond the allowance, from leave request #{leave_request.pk}')
+    return allowance_record or extra_record
 
 
 def submit_leave_request(*, employee, leave_type, start_date, end_date, employee_reason='', document=None,
@@ -346,6 +417,10 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.end_date = end_date
         leave_request.employee_reason = employee_reason
         leave_request.replacement = replacement
+        # An edit resets every decision, so an earlier approver's Annual /
+        # Unpaid pick for extra sick days goes too - it was made on the old
+        # request. The next approver chooses again.
+        leave_request.overflow_leave_type = None
         if document is False:
             if leave_request.document:
                 leave_request.document.delete(save=False)
@@ -358,7 +433,7 @@ def edit_leave_request(leave_request, editing_user, *, leave_type, start_date, e
         leave_request.days = leave_request.computed_days()
         leave_request.save(update_fields=[
             'leave_type', 'start_date', 'end_date', 'employee_reason', 'replacement', 'document',
-            'exceeds_balance', 'days', 'updated_at'])
+            'overflow_leave_type', 'exceeds_balance', 'days', 'updated_at'])
         if decided_approvals:
             leave_request.approvals.exclude(decision='pending').update(
                 decision='pending', comment='', decided_at=None)
@@ -423,15 +498,18 @@ def revoke_leave_request(leave_request, revoking_user, reason):
         current = LeaveRequest.objects.select_for_update().get(pk=leave_request.pk)
         if current.status != 'approved':
             raise ValueError(f'This request is {current.status}; only an approved request can be revoked.')
-        if current.leave_record_id:
-            lr = LeaveRecord.objects.filter(pk=current.leave_record_id).first()
-            if lr:
-                emp, start, end = lr.employee, lr.start_date, lr.end_date
-                lr.delete()
-                # Delete first so derive_status no longer sees the leave and
-                # the days fall back to present/late/absent.
-                from hr.attendance_services import sync_attendence_with_leave
-                sync_attendence_with_leave(emp, start, end)
+        # Every record this approval created: the leave itself plus, for a
+        # sick leave past the allowance, the extra days charged to Annual or
+        # Unpaid - so all of those balances come back.
+        records = LeaveRecord.objects.filter(
+            Q(pk=current.leave_record_id) | Q(overflow_for=current)) if current.leave_record_id \
+            else LeaveRecord.objects.filter(overflow_for=current)
+        if records.exists():
+            records.delete()
+            # Delete first so derive_status no longer sees the leave and
+            # the days fall back to present/late/absent.
+            from hr.attendance_services import sync_attendence_with_leave
+            sync_attendence_with_leave(current.employee, current.start_date, current.end_date)
         current.status = 'revoked'
         current.revoked_by = revoking_user
         current.revoked_at = timezone.now()

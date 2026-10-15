@@ -11854,6 +11854,12 @@ class LeaveReplacementTests(TestCase):
     secondary managers."""
 
     def setUp(self):
+        # Pin "today" so the September test dates are always new leave, which
+        # needs a replacement (leave that has already started doesn't).
+        from unittest.mock import patch
+        patcher = patch('django.utils.timezone.localdate', return_value=_date(2026, 9, 1))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.boss = Employee.objects.create(iqama_number='R0', full_name='Boss')
         self.sec = Employee.objects.create(iqama_number='R1', full_name='Second Mgr')
         self.emp = Employee.objects.create(iqama_number='R2', full_name='Applicant', main_manager=self.boss)
@@ -11928,6 +11934,39 @@ class LeaveReplacementTests(TestCase):
             'replacement': self.boss.pk})
         req.refresh_from_db()
         self.assertEqual(req.replacement, self.boss)
+
+    def _edit(self, req, start, end, **extra):
+        data = {'action': 'edit_leave_request', 'request_id': req.pk, 'leave_type': self.marriage.pk,
+                'start_date': start, 'end_date': end, 'employee_reason': 'x'}
+        data.update(extra)
+        self.client.login(username='rep_user', password='testpass123')
+        return self.client.post(reverse('hr:my_profile'), data)
+
+    def _pending(self, start, end):
+        return LeaveRequest.objects.create(
+            employee=self.emp, leave_type=self.marriage, start_date=start, end_date=end,
+            created_by=self.user, replacement=self.mate)
+
+    def test_editing_new_leave_still_needs_a_replacement(self):
+        req = self._pending(_date(2026, 9, 10), _date(2026, 9, 11))
+        resp = self._edit(req, '2026-09-10', '2026-09-11')  # replacement cleared
+        self.assertIn('edit_error=', resp.url)
+        req.refresh_from_db()
+        self.assertEqual(req.replacement, self.mate)
+
+    def test_editing_leave_that_already_started_can_drop_the_replacement(self):
+        req = self._pending(_date(2026, 8, 20), _date(2026, 8, 21))
+        resp = self._edit(req, '2026-08-20', '2026-08-21')
+        self.assertNotIn('edit_error=', resp.url)
+        req.refresh_from_db()
+        self.assertIsNone(req.replacement)
+
+    def test_moving_past_leave_into_the_future_makes_the_replacement_required(self):
+        req = self._pending(_date(2026, 8, 20), _date(2026, 8, 21))
+        resp = self._edit(req, '2026-09-20', '2026-09-21')
+        self.assertIn('edit_error=', resp.url)
+        req.refresh_from_db()
+        self.assertEqual(req.start_date, _date(2026, 8, 20))  # edit not applied
 
     def _hr(self, username='rep_hr'):
         from accounts.models import Role
@@ -12034,6 +12073,27 @@ class LeaveReplacementTests(TestCase):
         resp = self._log_on_behalf()
         self.assertContains(resp, "Please select who will cover for them while they")
         self.assertNotContains(resp, 'cover for you')
+
+    def test_past_leave_needs_no_replacement_on_my_profile(self):
+        resp = self._request(start_date='2026-08-10', end_date='2026-08-11')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(LeaveRequest.objects.get(employee=self.emp).replacement)
+
+    def test_past_leave_logged_on_behalf_needs_no_replacement(self):
+        self._hr()
+        resp = self._log_on_behalf(start_date='2026-08-10', end_date='2026-08-11')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(LeaveRequest.objects.get(employee=self.emp).replacement)
+
+    def test_leave_starting_today_still_needs_a_replacement(self):
+        resp = self._request(start_date='2026-09-01', end_date='2026-09-02')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Please select who will cover')
+
+    def test_past_leave_still_rejects_someone_outside_the_team(self):
+        resp = self._request(start_date='2026-08-10', end_date='2026-08-11', replacement=self.outsider.pk)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(LeaveRequest.objects.filter(employee=self.emp).exists())
 
     def test_approvers_see_the_replacement(self):
         from accounts.models import Role
@@ -12240,3 +12300,322 @@ class SickLeaveAttendanceSyncTests(TestCase):
             AttendanceRecord.objects.create(employee=self.emp, date=_date(2026, 8, d), status='late', check_in=time(9, 0))
         note = Notification.objects.get(recipient=user, verb='You were late 3 times this month')
         self.assertIn('in August 2026', note.description)
+
+
+class SickLeaveOverflowTests(TestCase):
+    """Sick leave past the allowance is allowed through: the approver charges
+    the extra days to Annual or Unpaid (HR's rule), everything is read live
+    from the entitlements, and the employee is never told which type."""
+
+    def setUp(self):
+        from accounts.models import Role
+        from hr.models import LeaveDashboardAccess
+        self.user = make_user('ovf_emp')
+        self.user.set_password('testpass123')
+        self.user.save()
+        self.emp = Employee.objects.create(iqama_number='OVF1', full_name='Overflow Olivia', user=self.user)
+        self.sick, _ = LeaveType.objects.update_or_create(code='sick', defaults={
+            'name': 'Sick', 'default_annual_days': 12, 'requires_medical_certificate': True, 'is_active': True})
+        self.annual, _ = LeaveType.objects.update_or_create(code='annual', defaults={
+            'name': 'Annual', 'default_annual_days': 30, 'is_accumulative': True, 'is_active': True})
+        self.unpaid, _ = LeaveType.objects.update_or_create(code='unpaid', defaults={
+            'name': 'Unpaid', 'default_annual_days': 0, 'is_paid': False, 'is_active': False})
+        self.sick_ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=self.sick, year=2026, entitled_days=12)
+        self.annual_ent = LeaveEntitlement.objects.create(
+            employee=self.emp, leave_type=self.annual, year=2026, entitled_days=30)
+        # All 12 sick days already taken.
+        LeaveRecord.objects.create(employee=self.emp, leave_type=self.sick,
+                                   start_date=_date(2026, 1, 1), end_date=_date(2026, 1, 12))
+        role, _ = Role.objects.get_or_create(name='super_admin')
+        self.approvers = []
+        for name in ('ovf_hr', 'ovf_gm'):
+            u = make_user(name)
+            u.set_password('testpass123')
+            u.role = role
+            u.save()
+            LeaveDashboardAccess.objects.create(user=u, is_active=True)
+            self.approvers.append(u)
+
+    def _set_sick_allowance(self, days):
+        self.sick_ent.entitled_days = days
+        self.sick_ent.save()
+
+    def _submit(self, start=_date(2026, 10, 6), end=_date(2026, 10, 8)):
+        from hr.leave_approval_services import submit_leave_request
+        return submit_leave_request(employee=self.emp, leave_type=self.sick, start_date=start,
+                                    end_date=end, created_by=self.user)
+
+    def _approve(self, req, approver, choice=None):
+        from hr.leave_approval_services import record_approver_decision
+        return record_approver_decision(req, approver, 'approved', overflow_leave_type_id=choice)
+
+    def _approve_both(self, req, choice):
+        self._approve(req, self.approvers[0], choice)
+        self._approve(req, self.approvers[1])
+        req.refresh_from_db()
+        return req
+
+    def test_request_past_the_allowance_is_allowed_not_blocked_or_held(self):
+        req = self._submit()
+        self.assertFalse(req.exceeds_balance)
+        self.assertEqual(req.sick_overflow_days, 3)
+
+    def test_extra_days_follow_hr_changes_to_the_sick_allowance(self):
+        from hr.models import LeaveExceptionGrant
+        req = self._submit()
+        self._set_sick_allowance(14)
+        self.assertEqual(LeaveRequest.objects.get(pk=req.pk).sick_overflow_days, 1)
+        self._set_sick_allowance(20)
+        self.assertEqual(LeaveRequest.objects.get(pk=req.pk).sick_overflow_days, 0)
+        self._set_sick_allowance(12)
+        LeaveExceptionGrant.objects.create(employee=self.emp, leave_type=self.sick, year=2026, days=2, reason='x')
+        self.assertEqual(LeaveRequest.objects.get(pk=req.pk).sick_overflow_days, 1)
+
+    def test_approving_without_choosing_where_the_days_come_from_is_refused(self):
+        req = self._submit()
+        with self.assertRaisesMessage(ValueError, 'Annual or Unpaid'):
+            self._approve(req, self.approvers[0])
+        self.assertEqual(req.approvals.get(approver=self.approvers[0]).decision, 'pending')
+
+    def test_only_annual_or_unpaid_can_absorb_the_days(self):
+        marriage, _ = LeaveType.objects.get_or_create(code='marriage', defaults={'name': 'Marriage'})
+        req = self._submit()
+        with self.assertRaisesMessage(ValueError, 'Annual or Unpaid'):
+            self._approve(req, self.approvers[0], marriage.pk)
+
+    def test_first_approver_picks_and_final_approval_charges_the_extra_days(self):
+        req = self._approve_both(self._submit(), self.annual.pk)
+        self.assertEqual(req.status, 'approved')
+        extra = req.overflow_records.get()
+        self.assertEqual((extra.leave_type, extra.days), (self.annual, 3))
+        self.assertEqual((extra.start_date, extra.end_date), (_date(2026, 10, 6), _date(2026, 10, 8)))
+        self.assertEqual(req.leave_record, extra)  # nothing was left in the sick allowance
+        self.assertEqual(self.annual_ent.taken_days, 3)
+        self.assertEqual(self.sick_ent.taken_days, 12)
+
+    def test_partial_allowance_uses_sick_first_then_the_chosen_type(self):
+        self._set_sick_allowance(13)
+        req = self._approve_both(self._submit(), self.annual.pk)
+        sick_part = req.leave_record
+        self.assertEqual((sick_part.leave_type, sick_part.days), (self.sick, 1))
+        self.assertEqual((sick_part.start_date, sick_part.end_date), (_date(2026, 10, 6), _date(2026, 10, 6)))
+        extra = req.overflow_records.get()
+        self.assertEqual((extra.start_date, extra.end_date, extra.days),
+                         (_date(2026, 10, 7), _date(2026, 10, 8), 2))
+
+    def test_second_approver_can_change_the_choice_and_unpaid_has_no_limit(self):
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.annual.pk)
+        self._approve(req, self.approvers[1], self.unpaid.pk)
+        req.refresh_from_db()
+        self.assertEqual(req.overflow_records.get().leave_type, self.unpaid)
+
+    def test_not_enough_annual_stops_the_approver(self):
+        self.annual_ent.entitled_days = 2
+        self.annual_ent.save()
+        req = self._submit()
+        with self.assertRaisesMessage(ValueError, 'consult HR'):
+            self._approve(req, self.approvers[0], self.annual.pk)
+        req.refresh_from_db()
+        self.assertIsNone(req.overflow_leave_type)
+        self.assertEqual(req.approvals.get(approver=self.approvers[0]).decision, 'pending')
+
+    def test_hr_raising_the_allowance_while_pending_means_nothing_extra_is_charged(self):
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.annual.pk)
+        self._set_sick_allowance(20)
+        self._approve(req, self.approvers[1])
+        req.refresh_from_db()
+        self.assertFalse(req.overflow_records.exists())
+        self.assertEqual((req.leave_record.leave_type, req.leave_record.days), (self.sick, 3))
+
+    def test_approved_split_is_not_redone_when_hr_changes_the_allowance_later(self):
+        req = self._approve_both(self._submit(), self.annual.pk)
+        self._set_sick_allowance(30)
+        req = LeaveRequest.objects.get(pk=req.pk)
+        self.assertEqual(req.sick_overflow_days, 3)
+        self.assertEqual(req.overflow_records.get().leave_type, self.annual)
+
+    def test_override_needs_the_choice_too(self):
+        from hr.leave_approval_services import override_finalize
+        req = self._submit()
+        with self.assertRaisesMessage(ValueError, 'Annual or Unpaid'):
+            override_finalize(req, self.approvers[0], 'approved', 'away')
+        override_finalize(req, self.approvers[0], 'approved', 'away', overflow_leave_type_id=self.unpaid.pk)
+        req.refresh_from_db()
+        self.assertEqual((req.status, req.overflow_records.get().leave_type), ('approved', self.unpaid))
+
+    def test_revoke_gives_every_balance_back(self):
+        from hr.leave_approval_services import revoke_leave_request
+        self._set_sick_allowance(13)
+        req = self._approve_both(self._submit(), self.annual.pk)
+        revoke_leave_request(req, self.approvers[0], 'mistake')
+        self.assertFalse(LeaveRecord.objects.filter(start_date__gte=_date(2026, 10, 1)).exists())
+        self.assertEqual(self.annual_ent.taken_days, 0)
+        self.assertEqual(self.sick_ent.taken_days, 12)
+
+    def test_register_shows_annual_charged_days_as_s_and_unpaid_as_u(self):
+        from hr.attendance_matrix import build_matrix
+        self._approve_both(self._submit(_date(2026, 10, 6), _date(2026, 10, 6)), self.unpaid.pk)
+        self._approve_both(self._submit(_date(2026, 10, 7), _date(2026, 10, 7)), self.annual.pk)
+        _days, rows = build_matrix([self.emp], _date(2026, 10, 6), _date(2026, 10, 7))
+        self.assertEqual([c['leave_code'] for c in rows[0]['cells']], ['sick_unpaid', 'sick'])
+
+    def test_extra_days_charged_to_annual_do_not_start_an_annual_cooldown(self):
+        from hr.leave_cooldown import annual_leave_cooldown
+        self._approve_both(self._submit(), self.annual.pk)
+        self.assertIsNone(annual_leave_cooldown(self.emp, self.annual, today=_date(2026, 10, 9)))
+
+    def test_employee_sees_the_notice_but_never_the_type(self):
+        self.client.login(username='ovf_emp', password='testpass123')
+        resp = self.client.get(reverse('hr:my_profile'))
+        self.assertContains(resp, 'You have used all 12 days of your sick leave for 2026')
+        # Hidden until Sick is chosen in the Leave Type dropdown.
+        self.assertContains(resp, 'small mb-2 d-none" id="sickAllowanceUsed"')
+        self.assertContains(resp, f'data-sick-leave-type="{self.sick.pk}"')
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.unpaid.pk)
+        html = self.client.get(reverse('hr:my_profile')).content.decode()
+        self.assertIn('3 day(s) are beyond your sick leave', html)
+        self.assertNotIn('Unpaid', html)
+
+    def test_submission_message_explains_the_extra_days(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.login(username='ovf_emp', password='testpass123')
+        resp = self.client.post(reverse('hr:my_profile'), {
+            'action': 'request_leave', 'leave_type': self.sick.pk,
+            'start_date': '2026-10-06', 'end_date': '2026-10-07', 'employee_reason': 'flu',
+            'document': SimpleUploadedFile('note.pdf', b'%PDF-1.4 cert', content_type='application/pdf'),
+        }, follow=True)
+        self.assertContains(resp, '2 day(s) of this request are beyond your remaining sick leave')
+
+    def test_approver_page_explains_and_offers_only_annual_and_unpaid(self):
+        req = self._submit()
+        self.client.force_login(self.approvers[0])
+        resp = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(resp, 'Sick leave allowance used up')
+        self.assertContains(resp, '3 day(s) of this request are beyond the allowance')
+        self.assertEqual(sorted(t.code for t in resp.context['overflow_choices']), ['annual', 'unpaid'])
+        self.assertContains(self.client.get(reverse('hr:leave_request_list')), 'Sick allowance used (+3)')
+
+    def test_approving_from_the_page_records_the_choice(self):
+        req = self._submit()
+        self.client.force_login(self.approvers[0])
+        self.client.post(reverse('hr:leave_request_detail', args=[req.pk]), {
+            'action': 'decide', 'decision': 'approved', 'overflow_leave_type': self.annual.pk})
+        req.refresh_from_db()
+        self.assertEqual(req.overflow_leave_type, self.annual)
+        self.assertEqual(req.approvals.get(approver=self.approvers[0]).decision, 'approved')
+
+    def test_excel_export_marks_unpaid_sick_days_as_u(self):
+        import io
+        import openpyxl as _op
+        from accounts.models import Role
+        self._approve_both(self._submit(_date(2026, 10, 6), _date(2026, 10, 6)), self.unpaid.pk)
+        admin = make_user('ovf_export')
+        admin.role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        admin.save()
+        self.client.force_login(admin)
+        resp = self.client.get(reverse('hr:attendance_matrix_export_excel') + '?period=month&date=2026-10-06')
+        ws = _op.load_workbook(io.BytesIO(resp.content)).active
+        header = [c.value for c in ws[3]]
+        row = next(r for r in ws.iter_rows(min_row=4) if r[0].value == 'Overflow Olivia')
+        self.assertEqual(row[header.index('06-Oct')].value, 'U')
+
+    def test_deleting_the_leave_also_removes_its_charged_extra_days(self):
+        from accounts.models import Role
+        self._set_sick_allowance(13)
+        req = self._approve_both(self._submit(), self.annual.pk)
+        admin = make_user('ovf_admin')
+        admin.role, _ = Role.objects.get_or_create(name=Role.ERP_ADMIN)
+        admin.save()
+        self.client.force_login(admin)
+        self.client.post(reverse('hr:leave_record_delete', args=[req.leave_record_id]))
+        self.assertFalse(LeaveRecord.objects.filter(start_date__gte=_date(2026, 10, 1)).exists())
+
+    def test_changing_an_earlier_pick_leaves_an_internal_note(self):
+        from hr.models import LeaveRequestNote
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.unpaid.pk)
+        self._approve(req, self.approvers[1], self.annual.pk)
+        note = LeaveRequestNote.objects.get(leave_request=req)
+        self.assertTrue(note.is_internal)
+        self.assertEqual(note.author, self.approvers[1])
+        self.assertIn('changed the extra sick days from Unpaid to Annual', note.note)
+
+    def test_keeping_the_earlier_pick_leaves_no_note(self):
+        from hr.models import LeaveRequestNote
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.unpaid.pk)
+        self._approve(req, self.approvers[1], self.unpaid.pk)
+        self.assertFalse(LeaveRequestNote.objects.filter(leave_request=req).exists())
+
+    def test_change_shows_to_approvers_but_never_to_the_employee(self):
+        from hr.leave_approval_services import record_approver_decision, edit_approver_decision
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.unpaid.pk)
+        record_approver_decision(req, self.approvers[1], 'disapproved')
+        edit_approver_decision(req, self.approvers[1], 'approved', 'fine', overflow_leave_type_id=self.annual.pk)
+        self.client.force_login(self.approvers[0])
+        page = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(page, 'changed the extra sick days from Unpaid to Annual')
+        self.client.login(username='ovf_emp', password='testpass123')
+        self.assertNotContains(self.client.get(reverse('hr:my_profile')), 'changed the extra sick days')
+
+    def test_change_warning_is_hidden_until_a_different_type_is_picked(self):
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.unpaid.pk)
+        self.client.force_login(self.approvers[1])
+        page = self.client.get(reverse('hr:leave_request_detail', args=[req.pk]))
+        self.assertContains(page, f'data-earlier="{self.unpaid.pk}"')
+        self.assertContains(page, 'd-none overflow-change-warning')
+        # No earlier pick yet: nothing to warn about.
+        other = self._submit(_date(2026, 11, 2), _date(2026, 11, 3))
+        self.assertNotContains(self.client.get(reverse('hr:leave_request_detail', args=[other.pk])),
+                               'd-none overflow-change-warning')
+
+    def test_log_on_behalf_lookup_says_when_sick_leave_is_used_up(self):
+        from unittest.mock import patch
+        self.client.force_login(self.approvers[0])
+        url = reverse('hr:leave_replacement_options')
+        with patch('django.utils.timezone.localdate', return_value=_date(2026, 10, 14)):
+            data = self.client.get(url, {'employee': self.emp.pk}).json()
+            self.assertEqual(data['sick_used_up']['leave_type_id'], self.sick.pk)
+            self.assertEqual(data['sick_used_up']['message'],
+                             'Overflow Olivia has used all 12 days of their sick leave for 2026. Any further '
+                             'sick days will be adjusted from their other leave, such as annual leave.')
+            self._set_sick_allowance(13)  # HR raises it: one day left, no notice
+            self.assertIsNone(self.client.get(url, {'employee': self.emp.pk}).json()['sick_used_up'])
+
+    def test_log_leave_page_has_the_hidden_sick_notice(self):
+        self.client.force_login(self.approvers[0])
+        page = self.client.get(reverse('hr:leave_request_create'))
+        self.assertContains(page, 'small mb-3 d-none" id="sickUsedUpNotice"')
+
+    def test_migration_recreates_a_missing_unpaid_type_inactive(self):
+        import importlib
+        from django.apps import apps
+        mig = importlib.import_module('hr.migrations.0057_sick_leave_overflow')
+        LeaveType.objects.filter(code='unpaid').delete()
+        mig.ensure_unpaid_leave_type(apps, None)
+        unpaid = LeaveType.objects.get(code='unpaid')
+        self.assertEqual((unpaid.is_paid, unpaid.is_active, unpaid.default_annual_days), (False, False, 0))
+        from hr.leave_services import overflow_target_choices
+        self.assertEqual(sorted(t.code for t in overflow_target_choices()), ['annual', 'unpaid'])
+        mig.ensure_unpaid_leave_type(apps, None)  # safe to run twice
+        self.assertEqual(LeaveType.objects.filter(code='unpaid').count(), 1)
+
+    def test_editing_a_pending_request_clears_the_earlier_pick(self):
+        from hr.leave_approval_services import edit_leave_request
+        req = self._submit()
+        self._approve(req, self.approvers[0], self.annual.pk)
+        req.refresh_from_db()
+        self.assertEqual(req.overflow_leave_type, self.annual)
+        edit_leave_request(req, self.user, leave_type=self.sick,
+                           start_date=_date(2026, 10, 5), end_date=_date(2026, 10, 8))
+        req.refresh_from_db()
+        self.assertIsNone(req.overflow_leave_type)
+        self.assertEqual(list(req.approvals.values_list('decision', flat=True)), ['pending', 'pending'])
+        with self.assertRaisesMessage(ValueError, 'Annual or Unpaid'):
+            self._approve(req, self.approvers[0])  # the next approver must choose again
