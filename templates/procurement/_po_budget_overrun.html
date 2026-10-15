@@ -1,0 +1,133 @@
+{% load humanize %}
+{% comment %}
+Budget warnings for a purchase order. Never blocks anything: an unlinked or
+over-budget PO still goes through the normal approval chain and can be printed.
+{% endcomment %}
+{% if not budget_linked %}
+<div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4" role="alert">
+    <div>
+        <i class="bi bi-exclamation-triangle-fill me-2"></i><strong>Not linked to any approved budget.</strong>
+        <span class="small">This purchase order can still be approved and printed, but its spend is not checked against a budget.</span>
+    </div>
+    {% if not user.is_procurement_read_only_user and not po.is_locked and po.project_id %}
+    <a href="{% url 'procurement:po_link_budget' po.pk %}" class="btn btn-sm btn-outline-dark">
+        <i class="bi bi-link-45deg me-1"></i>Link to budget
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% for o in budget_overruns %}{% if o.status != 'resolved' %}
+<div class="card mb-4 {% if o.is_open %}border-danger{% elif o.status == 'approved' %}border-success{% else %}border-secondary{% endif %}">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 {% if o.is_open %}bg-danger text-white{% else %}bg-light{% endif %}">
+        <div><i class="bi bi-exclamation-octagon-fill me-2"></i><strong>Over budget</strong> &middot; {{ o.costing_sheet.title }}</div>
+        <span class="badge {% if o.is_open %}bg-light text-danger{% elif o.status == 'approved' %}bg-success{% else %}bg-secondary{% endif %}">{{ o.get_status_display }}</span>
+    </div>
+    <div class="card-body">
+        {% if o.is_open %}
+        <p class="small text-muted mb-3">This purchase order is not blocked. It continues through the normal approvals while this overrun waits for SCM and PM remarks and a COO decision.</p>
+        {% endif %}
+
+        {% if o.over_total > 0 %}
+        <div class="mb-3">
+            <strong>Whole budget:</strong> {{ o.spend_total|floatformat:2|intcomma }} SAR committed of
+            {{ o.budget_total|floatformat:2|intcomma }} SAR approved,
+            <span class="text-danger fw-semibold">{{ o.over_total|floatformat:2|intcomma }} SAR over</span>.
+        </div>
+        {% endif %}
+
+        {% if o.lines.all %}
+        <div class="table-responsive mb-3">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr><th>Budget line</th><th class="text-end">Budgeted (SAR)</th><th class="text-end">Committed (SAR)</th><th class="text-end">Over (SAR)</th></tr>
+                </thead>
+                <tbody>
+                    {% for l in o.lines.all %}
+                    <tr>
+                        <td><span class="badge bg-danger me-1">Over</span>{{ l.budget_line.item_number }} {{ l.budget_line.description }}{% if l.others %}<div class="small text-muted mt-1">Also over on: {% for x in l.others %}<a href="{% url 'procurement:po_detail' x.purchase_order_id %}">{{ x.purchase_order.po_number }}</a> ({{ x.get_status_display }}){% if not forloop.last %}, {% endif %}{% endfor %}</div>{% endif %}</td>
+                        <td class="text-end">{{ l.budget|floatformat:2|intcomma }}</td>
+                        <td class="text-end">{{ l.spend|floatformat:2|intcomma }}</td>
+                        <td class="text-end text-danger fw-semibold">{{ l.over|floatformat:2|intcomma }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="border rounded p-3 h-100">
+                    <div class="small fw-semibold text-muted text-uppercase mb-2">Procurement (SCM) remarks</div>
+                    {% if o.scm_remarks %}
+                    <div style="white-space: pre-wrap;">{{ o.scm_remarks }}</div>
+                    <div class="small text-muted mt-1">{{ o.scm_remarks_by.get_full_name|default:o.scm_remarks_by.username }} &middot; {{ o.scm_remarks_at|date:"d M Y, H:i" }}</div>
+                    {% endif %}
+                    {% if o.is_open and overrun_can_scm %}
+                    <form method="post" action="{% url 'procurement:po_overrun_remarks' po.pk o.pk 'scm' %}" class="mt-2">
+                        {% csrf_token %}
+                        <textarea name="remarks" class="form-control form-control-sm mb-2" rows="2" required placeholder="Why is this purchase over budget?">{{ o.scm_remarks }}</textarea>
+                        <button type="submit" class="btn btn-sm btn-outline-primary">{% if o.scm_remarks %}Update{% else %}Add{% endif %} remarks</button>
+                    </form>
+                    {% elif not o.scm_remarks %}
+                    <div class="small text-muted">Waiting for the SCM signer.</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="border rounded p-3 h-100">
+                    <div class="small fw-semibold text-muted text-uppercase mb-2">PM remarks</div>
+                    {% if o.pm_remarks %}
+                    <div style="white-space: pre-wrap;">{{ o.pm_remarks }}</div>
+                    <div class="small text-muted mt-1">{{ o.pm_remarks_by.get_full_name|default:o.pm_remarks_by.username }} &middot; {{ o.pm_remarks_at|date:"d M Y, H:i" }}</div>
+                    {% endif %}
+                    {% if o.is_open and overrun_can_pm %}
+                    <form method="post" action="{% url 'procurement:po_overrun_remarks' po.pk o.pk 'pm' %}" class="mt-2">
+                        {% csrf_token %}
+                        <textarea name="remarks" class="form-control form-control-sm mb-2" rows="2" required placeholder="Why is this purchase needed despite the overrun?">{{ o.pm_remarks }}</textarea>
+                        <button type="submit" class="btn btn-sm btn-outline-primary">{% if o.pm_remarks %}Update{% else %}Add{% endif %} remarks</button>
+                    </form>
+                    {% elif not o.pm_remarks %}
+                    <div class="small text-muted">Waiting for the PM signer.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="border rounded p-3 mt-3">
+            <div class="small fw-semibold text-muted text-uppercase mb-2">COO decision</div>
+            {% if o.decided_at %}
+            <div>
+                <span class="badge {% if o.status == 'approved' %}bg-success{% else %}bg-secondary{% endif %}">{{ o.get_status_display }}</span>
+                by {{ o.decided_by.get_full_name|default:o.decided_by.username }} &middot; {{ o.decided_at|date:"d M Y, H:i" }}
+            </div>
+            {% if o.decision_remarks %}<div class="mt-1" style="white-space: pre-wrap;">{{ o.decision_remarks }}</div>{% endif %}
+            {% elif o.status == 'awaiting_coo' and overrun_can_coo %}
+            <form method="post" action="{% url 'procurement:po_overrun_decide' po.pk o.pk %}">
+                {% csrf_token %}
+                <textarea name="remarks" class="form-control form-control-sm mb-2" rows="2" placeholder="Remarks (required when rejecting: rejecting sends the PO back to draft for revision and clears its approvals)"></textarea>
+                <button type="submit" name="decision" value="approve" class="btn btn-sm btn-success">Approve overrun</button>
+                <button type="submit" name="decision" value="reject" class="btn btn-sm btn-outline-danger" onclick="return confirm('Reject this overrun? The purchase order goes back to draft for revision, and all its approval signatures are cleared so it is approved again from SCM.');">Reject and send back for revision</button>
+            </form>
+            {% elif o.status == 'awaiting_coo' %}
+            <div class="small text-muted">Waiting for the COO signer.</div>
+            {% else %}
+            <div class="small text-muted">Available once both SCM and PM remarks are in.</div>
+            {% endif %}
+        </div>
+
+        <details class="mt-3">
+            <summary class="small fw-semibold">History ({{ o.events.all|length }})</summary>
+            <ul class="list-unstyled small mt-2 mb-0">
+                {% for e in o.events.all %}
+                <li class="mb-1">
+                    <span class="text-muted">{{ e.created_at|date:"d M Y, H:i" }}</span> &middot; {{ e.get_action_display }}{% if e.actor %} &middot; {{ e.actor.get_full_name|default:e.actor.username }}{% endif %}
+                    {% if e.remarks %}<div class="ms-3 text-muted" style="white-space: pre-wrap;">{{ e.remarks }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </details>
+    </div>
+</div>
+{% endif %}{% endfor %}
