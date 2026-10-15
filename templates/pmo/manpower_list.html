@@ -18,6 +18,9 @@
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <h5><i class="bi bi-people me-2"></i>Manpower Status</h5>
         <div class="d-flex gap-2">
+            <a href="{% url 'pmo:manpower_dashboard' %}" class="btn btn-outline-light btn-sm">
+                <i class="bi bi-speedometer2 me-1"></i> Dashboard
+            </a>
             <form method="get" class="d-flex" role="search">
                 <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Search name, ID number, title…" style="min-width: 240px;">
             </form>
@@ -46,6 +49,8 @@
                     <th>Status</th>
                     <th>Discipline</th>
                     <th>Levels of Employment</th>
+                    <th>Current Project(s)</th>
+                    <th>Engagement</th>
                     {% if can_manage %}<th></th>{% endif %}
                 </tr>
             </thead>
@@ -72,12 +77,37 @@
                     </td>
                     <td>{{ employee.manpower_resource.get_discipline_display|default:"—" }}</td>
                     <td>{{ employee.manpower_resource.get_employment_level_display|default:"—" }}</td>
+                    <td>
+                        {% with current=employee.manpower_resource.current_assignments %}
+                        {% if current %}
+                        {% for a in current %}{{ a.project.project_name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                        {% endwith %}
+                    </td>
+                    <td>
+                        {% if employee.manpower_resource %}
+                            {% if employee.manpower_resource.engagement_status == 'overoccupied' %}
+                            <span class="badge bg-danger">Overoccupied</span>
+                            {% elif employee.manpower_resource.engagement_status == 'occupied' %}
+                            <span class="badge bg-success">Occupied</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Not Occupied</span>
+                            {% endif %}
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
                     {% if can_manage %}
                     <td class="text-end">
                         <a href="{% url 'pmo:manpower_edit' employee.pk %}" class="btn btn-sm btn-outline-dark">
                             <i class="bi bi-pencil"></i>
                         </a>
                         {% if employee.manpower_resource %}
+                        <a href="{% url 'pmo:manpower_assign' employee.pk %}" class="btn btn-sm btn-outline-danger" title="Assign to project">
+                            <i class="bi bi-diagram-3"></i>
+                        </a>
                         <form method="post" action="{% url 'pmo:manpower_clear' employee.pk %}" class="d-inline"
                               onsubmit="return confirm('Clear the Project Management details for {{ employee.full_name }}? They will stay on this list.');">
                             {% csrf_token %}
@@ -88,7 +118,7 @@
                     {% endif %}
                 </tr>
                 {% empty %}
-                <tr><td colspan="15" class="text-center text-muted py-4">No employees found.</td></tr>
+                <tr><td colspan="17" class="text-center text-muted py-4">No employees found.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
