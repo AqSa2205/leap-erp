@@ -2198,6 +2198,7 @@ def ajax_paste_line_items(request, pk):
             'output_currency': sheet.output_currency,
             'conversion_rate': conversion_rate,
             'can_see_pricing': _user_can_see_pricing(request.user),
+            'can_edit': _user_can_edit_sheet(request.user, sheet),
         }))
 
     return JsonResponse({
@@ -2387,6 +2388,7 @@ def ajax_add_line_item(request, pk):
         'exchange_rates': exchange_rates,
         'output_currency': sheet.output_currency,
         'conversion_rate': conversion_rate,
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
         'can_see_pricing': _user_can_see_pricing(request.user),
     })
     return JsonResponse({'ok': True, 'html': html, 'item_pk': item.pk})
@@ -2444,6 +2446,7 @@ def ajax_insert_line_item_after(request, pk):
         'exchange_rates': exchange_rates,
         'output_currency': sheet.output_currency,
         'conversion_rate': conversion_rate,
+        'can_edit': _user_can_edit_sheet(request.user, sheet),
         'can_see_pricing': _user_can_see_pricing(request.user),
     })
     return JsonResponse({
