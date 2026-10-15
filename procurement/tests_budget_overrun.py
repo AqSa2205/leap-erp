@@ -662,3 +662,60 @@ class NotificationTests(Fixture):
             bo.decide(o, self.boss, False, 'Too expensive.')
         for user in (creator, self.scm, self.pm):
             self.assertTrue(self.notified(user, 'Over-budget request rejected'))
+
+
+class DeletedApproverTests(Fixture):
+    """A deleted SCM remarker, PM remarker or COO must not 500 the PO page.
+
+    The FKs are SET_NULL but the template's guards test the remark text and
+    decided_at, which the delete leaves in place - so the names are guarded
+    individually and render as '(removed user)'.
+    """
+
+    def _page(self, po):
+        self.client.force_login(self.boss)
+        return self.client.get(reverse('procurement:po_detail', args=[po.pk]))
+
+    def test_baseline_page_loads_with_everyone_present(self):
+        self.signers()
+        po, o = self.flagged()
+        self.to_coo(o)
+        bo.decide(o, self.coo, True, 'Approved.')
+        self.assertEqual(self._page(po).status_code, 200)
+
+    def test_deleting_the_decider(self):
+        self.signers()
+        po, o = self.flagged()
+        self.to_coo(o)
+        bo.decide(o, self.coo, True, 'Approved.')
+        self.coo.delete()
+        o.refresh_from_db()
+        self.assertIsNone(o.decided_by)
+        self.assertIsNotNone(o.decided_at)
+        r = self._page(po)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '(removed user)')
+
+    def test_deleting_the_scm_remarker(self):
+        self.signers()
+        po, o = self.flagged()
+        bo.add_remarks(o, 'scm', self.scm, 'Vendor price rose.')
+        self.scm.delete()
+        o.refresh_from_db()
+        self.assertIsNone(o.scm_remarks_by)
+        self.assertTrue(o.scm_remarks)
+        r = self._page(po)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '(removed user)')
+
+    def test_deleting_the_pm_remarker(self):
+        self.signers()
+        po, o = self.flagged()
+        bo.add_remarks(o, 'pm', self.pm, 'Needed for handover.')
+        self.pm.delete()
+        o.refresh_from_db()
+        self.assertIsNone(o.pm_remarks_by)
+        self.assertTrue(o.pm_remarks)
+        r = self._page(po)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '(removed user)')
